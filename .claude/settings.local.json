@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip3 show *)",
+      "Bash(pip3 install *)",
+      "Bash(python3 main.py)",
+      "Bash(python3 -c \"import sys; from PySide6.QtWidgets import QApplication; from window import MainWindow; app = QApplication\\(sys.argv\\); w = MainWindow\\(\\); print\\('OK'\\)\")",
+      "Bash(python3 -c ' *)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}
