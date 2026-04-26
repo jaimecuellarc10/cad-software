@@ -4,7 +4,7 @@ from PySide6.QtGui import QPen, QColor, QPainter
 from .base import BaseTool
 from ..entities import CircleEntity
 from ..undo import AddEntityCommand
-from ..constants import SnapMode
+from ..constants import GRID_UNIT, SnapMode
 
 
 class CircleTool(BaseTool):
@@ -16,6 +16,7 @@ class CircleTool(BaseTool):
         super().__init__()
         self._center: QPointF | None = None
         self._cursor: QPointF | None = None
+        self._diameter_mode = False
 
     @property
     def is_idle(self) -> bool:
@@ -25,7 +26,13 @@ class CircleTool(BaseTool):
     def prompt(self) -> str:
         if self._center is None:
             return "CIRCLE  Specify center point:"
-        return "CIRCLE  Specify radius point  [Esc = cancel]"
+        if self._diameter_mode:
+            return "CIRCLE  Specify diameter:"
+        radius = 0.0
+        if self._cursor is not None:
+            radius = math.hypot(self._cursor.x() - self._center.x(),
+                                self._cursor.y() - self._center.y()) / GRID_UNIT
+        return f"CIRCLE  r={radius:.2f}  [R=radius  D=diam]"
 
     def snap_extras(self):
         if self._center is not None:
@@ -36,10 +43,12 @@ class CircleTool(BaseTool):
         super().activate(view)
         self._center = None
         self._cursor = None
+        self._diameter_mode = False
 
     def deactivate(self):
         self._center = None
         self._cursor = None
+        self._diameter_mode = False
         super().deactivate()
 
     # ── Mouse ─────────────────────────────────────────────────────────────────
@@ -61,9 +70,49 @@ class CircleTool(BaseTool):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.cancel()
 
+    def on_command(self, cmd: str) -> bool:
+        if self._center is None:
+            return False
+        text = cmd.strip()
+        diameter_mode = self._diameter_mode
+        if text.upper() == "D":
+            self._diameter_mode = True
+            if self.view:
+                self.view.viewport().update()
+            return True
+        if text.upper().startswith("D"):
+            diameter_mode = True
+            text = text[1:].strip()
+            if not text:
+                self._diameter_mode = True
+                if self.view:
+                    self.view.viewport().update()
+                return True
+        try:
+            value = float(text)
+        except ValueError:
+            return False
+        if diameter_mode:
+            value /= 2.0
+        r = value * GRID_UNIT
+        if r < 1:
+            return True
+        layer = self.view.layer_manager.current
+        from ..entities import CircleEntity
+        from ..undo import AddEntityCommand
+        entity = CircleEntity(self._center, r, layer)
+        self.view.undo_stack.push(AddEntityCommand(self.view.cad_scene, entity))
+        self._center = None
+        self._cursor = None
+        self._diameter_mode = False
+        if self.view:
+            self.view.viewport().update()
+        return True
+
     def cancel(self):
         self._center = None
         self._cursor = None
+        self._diameter_mode = False
         if self.view:
             self.view.viewport().update()
 
@@ -102,6 +151,9 @@ class CircleTool(BaseTool):
         cursor_vp = v.mapFromScene(self._cursor)
         painter.setPen(QPen(COLOR, 1, Qt.PenStyle.DashLine))
         painter.drawLine(center_vp, cursor_vp)
+        radius_units = radius_scene / GRID_UNIT
+        painter.setPen(QPen(QColor('#ffffff'), 1))
+        painter.drawText(cursor_vp.x() + 8, cursor_vp.y() - 8, f'r={radius_units:.2f}')
 
     # ── Commit ────────────────────────────────────────────────────────────────
 
@@ -116,5 +168,6 @@ class CircleTool(BaseTool):
         self.view.undo_stack.push(AddEntityCommand(self.view.cad_scene, entity))
         self._center = None
         self._cursor = None
+        self._diameter_mode = False
         if self.view:
             self.view.viewport().update()

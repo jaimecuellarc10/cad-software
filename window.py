@@ -23,6 +23,23 @@ from cad.tools.rotate import RotateTool
 from cad.tools.mirror import MirrorTool
 from cad.tools.trim import TrimTool
 from cad.tools.extend import ExtendTool
+from cad.tools.offset import OffsetTool
+from cad.tools.ellipse import EllipseTool
+from cad.tools.scale import ScaleTool
+from cad.tools.fillet import FilletTool
+from cad.tools.chamfer import ChamferTool
+from cad.tools.break_tool import BreakTool
+from cad.tools.polygon   import PolygonTool
+from cad.tools.xline     import XLineTool
+from cad.tools.explode   import ExplodeTool
+from cad.tools.join_tool import JoinTool
+from cad.tools.array     import ArrayTool
+from cad.tools.stretch   import StretchTool
+from cad.tools.text_tool import TextTool
+from cad.tools.dimension import DimLinearTool, DimAngularTool
+from cad.tools.hatch     import HatchTool
+from cad.tools.spline    import SplineTool
+from cad.tools.lengthen  import LengthenTool
 
 # ── AutoCAD command aliases ───────────────────────────────────────────────────
 COMMANDS: dict[str, str] = {
@@ -35,22 +52,48 @@ COMMANDS: dict[str, str] = {
     "C": "circle", "CI": "circle", "CIR": "circle",
     "CIRC": "circle", "CIRCLE": "circle",
     # Arc
-    "A": "arc", "AR": "arc", "ARC": "arc",
+    "A": "arc", "ARC": "arc",
     # Rectangle
     "REC": "rectangle", "RECT": "rectangle",
     "RECTANGLE": "rectangle", "RECTANG": "rectangle",
+    # Ellipse
+    "EL": "ellipse", "ELLIPSE": "ellipse",
     # Move
     "M": "move", "MO": "move", "MOV": "move", "MOVE": "move",
+    # Scale
+    "SC": "scale", "SCALE": "scale",
     # Copy
     "CO": "copy", "CP": "copy", "COPY": "copy",
     # Rotate
     "RO": "rotate", "ROT": "rotate", "ROTATE": "rotate",
     # Mirror
     "MI": "mirror", "MIR": "mirror", "MIRROR": "mirror",
+    # Offset
+    "O": "offset", "OF": "offset", "OFFSET": "offset",
+    # Fillet
+    "F": "fillet", "FI": "fillet", "FILLET": "fillet",
+    # Chamfer
+    "CHA": "chamfer", "CHAMFER": "chamfer",
+    # Break
+    "BR": "break", "BREAK": "break",
+    "POL": "polygon", "POLYGON": "polygon",
+    "XLINE": "xline", "XL": "xline", "RAY": "xline",
+    "X": "explode", "EXPLODE": "explode",
+    "J": "join", "JOIN": "join",
+    "AR": "array", "ARRAY": "array",
+    "S": "stretch", "STRETCH": "stretch",
+    "T": "text", "TEXT": "text", "MT": "text", "MTEXT": "text",
+    "DIM": "dimlinear", "DIMLINEAR": "dimlinear", "DLI": "dimlinear",
+    "DIMANGULAR": "dimangular", "DAN": "dimangular",
+    "H": "hatch", "HATCH": "hatch", "BH": "hatch",
+    "SPL": "spline", "SPLINE": "spline",
+    "LEN": "lengthen", "LENGTHEN": "lengthen",
     # Trim
     "TR": "trim", "TRIM": "trim",
     # Extend
     "EX": "extend", "EXT": "extend", "EXTEND": "extend",
+    # Zoom extents
+    "ZE": "zoom_extents", "EXTENTS": "zoom_extents", "ZOOM": "zoom_extents",
 }
 
 # Tool options (sub-commands while a tool is active)
@@ -62,11 +105,29 @@ TOOL_OPTIONS: dict[str, dict[str, str]] = {
     "circle":    {},
     "arc":       {},
     "rectangle": {},
+    "ellipse":   {},
     "move":      {},
+    "scale":     {},
     "copy":      {},
     "rotate":    {},
     "trim":      {},
     "extend":    {},
+    "offset":    {},
+    "fillet":    {},
+    "chamfer":   {},
+    "break":     {},
+    "polygon":   {},
+    "xline":     {},
+    "explode":   {},
+    "join":      {},
+    "array":     {},
+    "stretch":   {},
+    "text":      {},
+    "dimlinear": {},
+    "dimangular": {},
+    "hatch":     {},
+    "spline":    {},
+    "lengthen":  {},
 }
 
 
@@ -126,6 +187,24 @@ class MainWindow(QMainWindow):
         self._mirror_tool    = MirrorTool()
         self._trim_tool      = TrimTool()
         self._extend_tool    = ExtendTool()
+        self._offset_tool    = OffsetTool()
+        self._ellipse_tool   = EllipseTool()
+        self._scale_tool     = ScaleTool()
+        self._fillet_tool    = FilletTool()
+        self._chamfer_tool   = ChamferTool()
+        self._break_tool     = BreakTool()
+        self._polygon_tool   = PolygonTool()
+        self._xline_tool     = XLineTool()
+        self._explode_tool   = ExplodeTool()
+        self._join_tool      = JoinTool()
+        self._array_tool     = ArrayTool()
+        self._stretch_tool   = StretchTool()
+        self._text_tool      = TextTool()
+        self._dimlinear_tool = DimLinearTool()
+        self._dimangular_tool = DimAngularTool()
+        self._hatch_tool     = HatchTool()
+        self._spline_tool    = SplineTool()
+        self._lengthen_tool  = LengthenTool()
 
         self._last_draw_tool: str | None = None
 
@@ -171,6 +250,15 @@ class MainWindow(QMainWindow):
             "Arc 3-pt  [A]\nClick start → point on arc → end point")
         add("rectangle", "Rectangle",
             "Rectangle  [REC]\nClick corner → click opposite corner")
+        add("ellipse",  "Ellipse",
+            "Ellipse  [EL]\nClick center -> axis1 endpoint -> axis2 half-length")
+        add("polygon", "Polygon", "Polygon  [POL]\nType sides, pick center, pick/type radius")
+        add("xline",   "XLine",   "XLine  [XLINE]\nInfinite construction line")
+        add("text",    "Text",    "Text  [T]\nPick insertion point, then type text")
+        add("spline",  "Spline",  "Spline  [SPL]\nClick control points, Enter/Space = done")
+        add("hatch",   "Hatch",   "Hatch  [H]\nClick inside a closed region")
+        add("dimlinear", "Dim Lin", "Linear dimension  [DLI]\nPick two points, then offset")
+        add("dimangular", "Dim Ang", "Angular dimension  [DAN]\nPick vertex and two rays")
         tb.addSeparator()
         add("move",      "Move",
             "Move  [M]\nSelect objects first, then pick base point → destination")
@@ -180,6 +268,21 @@ class MainWindow(QMainWindow):
             "Rotate  [RO]\nSelect objects first, then pick base point → drag or type angle")
         add("mirror",    "Mirror",
             "Mirror  [MI]\nSelect objects first, then pick 2 mirror-line points\nY+Enter = keep original")
+        add("offset",    "Offset",
+            "Offset  [O]\nSpecify distance, pick object, click side")
+        add("scale",    "Scale",
+            "Scale  [SC]\nSelect, pick base, drag or type factor")
+        add("fillet",   "Fillet",
+            "Fillet  [F]\nType radius, click two lines")
+        add("chamfer",  "Chamfer",
+            "Chamfer  [CHA]\nType distances, click two lines")
+        add("break",    "Break",
+            "Break  [BR]\nClick entity at first break point, then second")
+        add("array",   "Array",   "Array  [AR]\nSelect → [R]ect rows,cols,dx,dy or [P]olar count,angle")
+        add("stretch", "Stretch", "Stretch  [S]\nDrag crossing window over vertices, then base→dest")
+        add("explode", "Explode", "Explode  [X]\nBreak polyline into individual line segments")
+        add("join",    "Join",    "Join  [J]\nMerge touching lines/polylines into one polyline")
+        add("lengthen", "Lengthen", "Lengthen  [LEN]\nType delta, then click an endpoint")
         tb.addSeparator()
         add("trim",      "Trim",
             "Trim  [TR]\nClick the part of a line to trim (needs intersecting geometry)")
@@ -263,7 +366,10 @@ class MainWindow(QMainWindow):
         # Global command lookup
         tool_name = COMMANDS.get(cmd)
         if tool_name:
-            self._activate_tool(tool_name)
+            if tool_name == "zoom_extents":
+                self.view.zoom_extents()
+            else:
+                self._activate_tool(tool_name)
             self._cmd_bar.add_history(f"  {cmd}")
         else:
             self._cmd_bar.add_history(f"  Unknown command: {cmd}")
@@ -282,12 +388,30 @@ class MainWindow(QMainWindow):
             "circle":    self._circle_tool,
             "arc":       self._arc_tool,
             "rectangle": self._rectangle_tool,
+            "ellipse":   self._ellipse_tool,
             "move":      self._move_tool,
+            "scale":     self._scale_tool,
             "copy":      self._copy_tool,
             "rotate":    self._rotate_tool,
             "mirror":    self._mirror_tool,
             "trim":      self._trim_tool,
             "extend":    self._extend_tool,
+            "offset":    self._offset_tool,
+            "fillet":    self._fillet_tool,
+            "chamfer":   self._chamfer_tool,
+            "break":     self._break_tool,
+            "polygon":   self._polygon_tool,
+            "xline":     self._xline_tool,
+            "explode":   self._explode_tool,
+            "join":      self._join_tool,
+            "array":     self._array_tool,
+            "stretch":   self._stretch_tool,
+            "text":      self._text_tool,
+            "dimlinear": self._dimlinear_tool,
+            "dimangular": self._dimangular_tool,
+            "hatch":     self._hatch_tool,
+            "spline":    self._spline_tool,
+            "lengthen":  self._lengthen_tool,
         }
         tool = tool_map.get(name)
         if tool is None:

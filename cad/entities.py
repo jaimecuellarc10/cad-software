@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import math
 from PySide6.QtWidgets import QGraphicsItem
-from PySide6.QtGui import QPen, QColor, QPainter, QPolygonF
+from PySide6.QtGui import QPen, QColor, QPainter, QPolygonF, QFont, QPainterPath, QBrush
 from PySide6.QtCore import Qt, QRectF, QPointF, QLineF
 
-from .constants import SnapMode, GRIP_PX
+from .constants import SnapMode, GRIP_PX, GRID_UNIT
 
 
 class Layer:
@@ -75,6 +77,9 @@ class CADEntity(QGraphicsItem):
     # ── Transforms (override in subclasses) ───────────────────────────────────
 
     def translate(self, dx: float, dy: float):
+        raise NotImplementedError
+
+    def scale_about(self, cx: float, cy: float, factor: float):
         raise NotImplementedError
 
     def rotate_about(self, cx: float, cy: float, angle_deg: float):
@@ -167,6 +172,12 @@ class LineEntity(CADEntity):
         self.prepareGeometryChange()
         self._p1 = QPointF(self._p1.x() + dx, self._p1.y() + dy)
         self._p2 = QPointF(self._p2.x() + dx, self._p2.y() + dy)
+        self.update()
+
+    def scale_about(self, cx: float, cy: float, factor: float):
+        self.prepareGeometryChange()
+        self._p1 = _scale_pt(self._p1, cx, cy, factor)
+        self._p2 = _scale_pt(self._p2, cx, cy, factor)
         self.update()
 
     def rotate_about(self, cx: float, cy: float, angle_deg: float):
@@ -264,6 +275,11 @@ class PolylineEntity(CADEntity):
         self._verts = [QPointF(v.x() + dx, v.y() + dy) for v in self._verts]
         self.update()
 
+    def scale_about(self, cx: float, cy: float, factor: float):
+        self.prepareGeometryChange()
+        self._verts = [_scale_pt(v, cx, cy, factor) for v in self._verts]
+        self.update()
+
     def rotate_about(self, cx: float, cy: float, angle_deg: float):
         self.prepareGeometryChange()
         cos_a = math.cos(math.radians(angle_deg))
@@ -336,6 +352,12 @@ class CircleEntity(CADEntity):
         self._center = QPointF(self._center.x() + dx, self._center.y() + dy)
         self.update()
 
+    def scale_about(self, cx: float, cy: float, factor: float):
+        self.prepareGeometryChange()
+        self._center = _scale_pt(self._center, cx, cy, factor)
+        self._radius *= abs(factor)
+        self.update()
+
     def rotate_about(self, cx: float, cy: float, angle_deg: float):
         self.prepareGeometryChange()
         cos_a = math.cos(math.radians(angle_deg))
@@ -373,6 +395,12 @@ class ArcEntity(CADEntity):
 
     @property
     def center(self) -> QPointF: return QPointF(self._center)
+    @property
+    def radius(self) -> float: return self._radius
+    @property
+    def start_angle(self) -> float: return self._start_angle
+    @property
+    def span_angle(self) -> float: return self._span_angle
 
     def _point_at(self, deg: float) -> QPointF:
         rad = math.radians(deg)
@@ -428,6 +456,12 @@ class ArcEntity(CADEntity):
         self._center = QPointF(self._center.x() + dx, self._center.y() + dy)
         self.update()
 
+    def scale_about(self, cx: float, cy: float, factor: float):
+        self.prepareGeometryChange()
+        self._center = _scale_pt(self._center, cx, cy, factor)
+        self._radius *= abs(factor)
+        self.update()
+
     def rotate_about(self, cx: float, cy: float, angle_deg: float):
         self.prepareGeometryChange()
         cos_a = math.cos(math.radians(angle_deg))
@@ -461,6 +495,725 @@ class ArcEntity(CADEntity):
                          self._span_angle, self.layer, self.lineweight)
 
 
+class EllipseEntity(CADEntity):
+    """Ellipse defined by center, semi-axes rx/ry, and rotation angle (CCW on screen)."""
+    def __init__(self, center: QPointF, rx: float, ry: float,
+                 angle_deg: float, layer: "Layer", lineweight: float | None = None):
+        super().__init__(layer)
+        self._center    = QPointF(center)
+        self._rx        = float(rx)
+        self._ry        = float(ry)
+        self._angle_deg = float(angle_deg)
+        self.lineweight = lineweight
+
+    @property
+    def center(self) -> QPointF: return QPointF(self._center)
+    @property
+    def rx(self) -> float: return self._rx
+    @property
+    def ry(self) -> float: return self._ry
+    @property
+    def angle_deg(self) -> float: return self._angle_deg
+
+    def snap_points(self, mode: SnapMode) -> list[QPointF]:
+        if mode == SnapMode.CENTER:
+            return [QPointF(self._center)]
+        if mode == SnapMode.ENDPOINT:
+            cos_a = math.cos(math.radians(self._angle_deg))
+            sin_a = math.sin(math.radians(self._angle_deg))
+            cx, cy = self._center.x(), self._center.y()
+            return [
+                QPointF(cx + self._rx*cos_a, cy - self._rx*sin_a),
+                QPointF(cx - self._rx*cos_a, cy + self._rx*sin_a),
+                QPointF(cx - self._ry*sin_a, cy - self._ry*cos_a),
+                QPointF(cx + self._ry*sin_a, cy + self._ry*cos_a),
+            ]
+        return []
+
+    def line_segments(self) -> list:
+        return []
+
+    def boundingRect(self) -> QRectF:
+        r = max(self._rx, self._ry) + 2
+        return QRectF(self._center.x()-r, self._center.y()-r, r*2, r*2)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        lw  = self.lineweight if self.lineweight is not None else self.layer.lineweight
+        pen = QPen(self.draw_color, lw)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.save()
+        painter.translate(self._center)
+        painter.rotate(-self._angle_deg)   # Qt rotates CW; negate for CCW convention
+        painter.drawEllipse(QRectF(-self._rx, -self._ry, self._rx*2, self._ry*2))
+        painter.restore()
+        if self._selected:
+            self._paint_grips(painter)
+
+    def hit_test(self, pt: QPointF, threshold: float) -> bool:
+        cos_a = math.cos(math.radians(-self._angle_deg))
+        sin_a = math.sin(math.radians(-self._angle_deg))
+        dx = pt.x()-self._center.x(); dy = pt.y()-self._center.y()
+        lx = dx*cos_a - dy*sin_a
+        ly = dx*sin_a + dy*cos_a
+        if self._rx < 1e-6 or self._ry < 1e-6: return False
+        d = math.hypot(lx/self._rx, ly/self._ry)
+        return abs(d - 1.0) * min(self._rx, self._ry) <= threshold
+
+    def intersects_rect(self, rect: QRectF, crossing: bool) -> bool:
+        cx, cy = self._center.x(), self._center.y()
+        r = max(self._rx, self._ry)
+        if crossing:
+            nx = max(rect.left(), min(cx, rect.right()))
+            ny = max(rect.top(),  min(cy, rect.bottom()))
+            return math.hypot(cx-nx, cy-ny) <= r
+        return (rect.left() <= cx-r and rect.right()  >= cx+r and
+                rect.top()  <= cy-r and rect.bottom() >= cy+r)
+
+    def translate(self, dx: float, dy: float):
+        self.prepareGeometryChange()
+        self._center = QPointF(self._center.x()+dx, self._center.y()+dy)
+        self.update()
+
+    def scale_about(self, cx: float, cy: float, factor: float):
+        self.prepareGeometryChange()
+        dx = self._center.x()-cx; dy = self._center.y()-cy
+        self._center = QPointF(cx+dx*factor, cy+dy*factor)
+        self._rx *= factor; self._ry *= factor
+        self.update()
+
+    def rotate_about(self, cx: float, cy: float, angle_deg: float):
+        self.prepareGeometryChange()
+        cos_a = math.cos(math.radians(angle_deg))
+        sin_a = math.sin(math.radians(angle_deg))
+        self._center = _rotate_pt(self._center, cx, cy, cos_a, sin_a)
+        self._angle_deg = (self._angle_deg + angle_deg) % 360
+        self.update()
+
+    def mirror_across(self, ax: float, ay: float, bx: float, by: float):
+        self.prepareGeometryChange()
+        self._center = _mirror_pt(self._center, ax, ay, bx, by)
+        axis_angle = math.degrees(math.atan2(by-ay, bx-ax))
+        self._angle_deg = 2*axis_angle - self._angle_deg
+        self.update()
+
+    def clone(self) -> "EllipseEntity":
+        return EllipseEntity(self._center, self._rx, self._ry,
+                             self._angle_deg, self.layer, self.lineweight)
+
+
+class XLineEntity(CADEntity):
+    """Infinite construction line through _point in direction _angle_deg."""
+    XLINE_HALF = 45000.0
+
+    def __init__(self, point: QPointF, angle_deg: float, layer: "Layer",
+                 lineweight: float | None = None):
+        super().__init__(layer)
+        self._point     = QPointF(point)
+        self._angle_deg = float(angle_deg)
+        self.lineweight = lineweight
+
+    @property
+    def point(self) -> QPointF: return QPointF(self._point)
+    @property
+    def angle_deg(self) -> float: return self._angle_deg
+
+    def _endpoints(self):
+        rad = math.radians(self._angle_deg)
+        dx = math.cos(rad) * self.XLINE_HALF
+        dy = math.sin(rad) * self.XLINE_HALF
+        p1 = QPointF(self._point.x() - dx, self._point.y() + dy)
+        p2 = QPointF(self._point.x() + dx, self._point.y() - dy)
+        return p1, p2
+
+    def snap_points(self, mode: SnapMode) -> list[QPointF]:
+        if mode == SnapMode.MIDPOINT:
+            return [QPointF(self._point)]
+        return []
+
+    def line_segments(self) -> list[QLineF]:
+        p1, p2 = self._endpoints()
+        return [QLineF(p1, p2)]
+
+    def boundingRect(self) -> QRectF:
+        h = self.XLINE_HALF + 2
+        return QRectF(-h, -h, h*2, h*2).translated(self._point)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        lw = self.lineweight if self.lineweight is not None else self.layer.lineweight
+        color = self.draw_color
+        pen = QPen(color, lw, Qt.PenStyle.DashDotLine)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        p1, p2 = self._endpoints()
+        painter.drawLine(p1, p2)
+        if self._selected:
+            self._paint_grips(painter)
+
+    def hit_test(self, pt: QPointF, threshold: float) -> bool:
+        p1, p2 = self._endpoints()
+        return _seg_dist(pt, p1, p2) <= threshold
+
+    def intersects_rect(self, rect: QRectF, crossing: bool) -> bool:
+        p1, p2 = self._endpoints()
+        if crossing:
+            seg = QLineF(p1, p2)
+            for edge in _rect_edges(rect):
+                itype, _ = seg.intersects(edge)
+                if itype == QLineF.IntersectionType.BoundedIntersection:
+                    return True
+            return rect.contains(self._point)
+        return False
+
+    def translate(self, dx: float, dy: float):
+        self.prepareGeometryChange()
+        self._point = QPointF(self._point.x()+dx, self._point.y()+dy)
+        self.update()
+
+    def scale_about(self, cx: float, cy: float, factor: float):
+        self.prepareGeometryChange()
+        dx = self._point.x()-cx; dy = self._point.y()-cy
+        self._point = QPointF(cx+dx*factor, cy+dy*factor)
+        self.update()
+
+    def rotate_about(self, cx: float, cy: float, angle_deg: float):
+        self.prepareGeometryChange()
+        cos_a = math.cos(math.radians(angle_deg))
+        sin_a = math.sin(math.radians(angle_deg))
+        self._point = _rotate_pt(self._point, cx, cy, cos_a, sin_a)
+        self._angle_deg = (self._angle_deg + angle_deg) % 360
+        self.update()
+
+    def mirror_across(self, ax: float, ay: float, bx: float, by: float):
+        self.prepareGeometryChange()
+        self._point = _mirror_pt(self._point, ax, ay, bx, by)
+        axis_angle = math.degrees(math.atan2(by-ay, bx-ax))
+        self._angle_deg = (2*axis_angle - self._angle_deg) % 360
+        self.update()
+
+    def clone(self) -> "XLineEntity":
+        return XLineEntity(self._point, self._angle_deg, self.layer, self.lineweight)
+
+
+class TextEntity(CADEntity):
+    def __init__(self, pos: QPointF, text: str, height: float = 2.5,
+                 angle_deg: float = 0.0, layer: "Layer" | None = None):
+        super().__init__(layer or Layer("0"))
+        self._pos = QPointF(pos)
+        self._text = text
+        self._height = float(height)
+        self._angle_deg = float(angle_deg)
+
+    @property
+    def pos(self) -> QPointF: return QPointF(self._pos)
+    @property
+    def text(self) -> str: return self._text
+    @property
+    def height(self) -> float: return self._height
+    @property
+    def angle_deg(self) -> float: return self._angle_deg
+
+    def _local_rect(self) -> QRectF:
+        scene_h = self._height * GRID_UNIT
+        scene_w = max(1.0, len(self._text) * scene_h * 0.6)
+        return QRectF(0, -scene_h, scene_w, scene_h)
+
+    def _world_corners(self) -> list[QPointF]:
+        r = self._local_rect()
+        cos_a = math.cos(math.radians(self._angle_deg))
+        sin_a = math.sin(math.radians(self._angle_deg))
+        pts = [r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()]
+        return [
+            QPointF(self._pos.x() + p.x()*cos_a + p.y()*sin_a,
+                    self._pos.y() - p.x()*sin_a + p.y()*cos_a)
+            for p in pts
+        ]
+
+    def boundingRect(self) -> QRectF:
+        pts = self._world_corners()
+        xs = [p.x() for p in pts]; ys = [p.y() for p in pts]
+        return QRectF(min(xs), min(ys), max(xs)-min(xs), max(ys)-min(ys)).adjusted(-4, -4, 4, 4)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.save()
+        painter.translate(self._pos)
+        painter.rotate(-self._angle_deg)
+        painter.setFont(QFont("Arial", max(1, int(self._height * GRID_UNIT))))
+        painter.setPen(QPen(QColor(255, 165, 0) if self._selected else QColor("#ffffff"), 0))
+        painter.drawText(0, 0, self._text)
+        painter.restore()
+        if self._selected:
+            self._paint_grips(painter)
+
+    def snap_points(self, mode: SnapMode) -> list[QPointF]:
+        if mode == SnapMode.ENDPOINT:
+            return [QPointF(self._pos)]
+        return []
+
+    def line_segments(self) -> list[QLineF]:
+        return []
+
+    def hit_test(self, pt: QPointF, threshold: float) -> bool:
+        dx = pt.x() - self._pos.x()
+        dy = pt.y() - self._pos.y()
+        cos_a = math.cos(math.radians(self._angle_deg))
+        sin_a = math.sin(math.radians(self._angle_deg))
+        lx = dx*cos_a - dy*sin_a
+        ly = dx*sin_a + dy*cos_a
+        return self._local_rect().adjusted(-threshold, -threshold, threshold, threshold).contains(QPointF(lx, ly))
+
+    def intersects_rect(self, rect: QRectF, crossing: bool) -> bool:
+        return rect.contains(self._pos)
+
+    def translate(self, dx: float, dy: float):
+        self.prepareGeometryChange()
+        self._pos = QPointF(self._pos.x()+dx, self._pos.y()+dy)
+        self.update()
+
+    def rotate_about(self, cx: float, cy: float, angle_deg: float):
+        self.prepareGeometryChange()
+        cos_a = math.cos(math.radians(angle_deg))
+        sin_a = math.sin(math.radians(angle_deg))
+        self._pos = _rotate_pt(self._pos, cx, cy, cos_a, sin_a)
+        self._angle_deg = (self._angle_deg + angle_deg) % 360
+        self.update()
+
+    def mirror_across(self, ax: float, ay: float, bx: float, by: float):
+        self.prepareGeometryChange()
+        self._pos = _mirror_pt(self._pos, ax, ay, bx, by)
+        self._angle_deg = -self._angle_deg
+        self.update()
+
+    def scale_about(self, cx: float, cy: float, factor: float):
+        self.prepareGeometryChange()
+        self._pos = _scale_pt(self._pos, cx, cy, factor)
+        self._height *= abs(factor)
+        self.update()
+
+    def clone(self) -> "TextEntity":
+        return TextEntity(QPointF(self._pos), self._text, self._height,
+                          self._angle_deg, self.layer)
+
+
+class DimLinearEntity(CADEntity):
+    def __init__(self, p1: QPointF, p2: QPointF, offset: float,
+                 text_override: str = "", layer: "Layer" | None = None):
+        super().__init__(layer or Layer("0"))
+        self._p1 = QPointF(p1)
+        self._p2 = QPointF(p2)
+        self._offset = float(offset)
+        self._text_override = text_override
+
+    @property
+    def p1(self) -> QPointF: return QPointF(self._p1)
+    @property
+    def p2(self) -> QPointF: return QPointF(self._p2)
+    @property
+    def offset(self) -> float: return self._offset
+
+    def _geometry(self):
+        dx = self._p2.x() - self._p1.x()
+        dy = self._p2.y() - self._p1.y()
+        length = math.hypot(dx, dy)
+        if length < 1e-6:
+            ux, uy = 1.0, 0.0
+        else:
+            ux, uy = dx / length, dy / length
+        nx, ny = -uy, ux
+        q1 = QPointF(self._p1.x() + nx*self._offset, self._p1.y() + ny*self._offset)
+        q2 = QPointF(self._p2.x() + nx*self._offset, self._p2.y() + ny*self._offset)
+        return q1, q2, ux, uy, nx, ny, length
+
+    def boundingRect(self) -> QRectF:
+        q1, q2, *_ = self._geometry()
+        pts = [self._p1, self._p2, q1, q2]
+        xs = [p.x() for p in pts]; ys = [p.y() for p in pts]
+        return QRectF(min(xs), min(ys), max(xs)-min(xs), max(ys)-min(ys)).adjusted(-20, -20, 20, 20)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        q1, q2, ux, uy, nx, ny, length = self._geometry()
+        color = QColor(255, 165, 0) if self._selected else QColor("#ffffff")
+        painter.setPen(QPen(color, 0))
+        painter.setBrush(color)
+        painter.drawLine(self._p1, q1)
+        painter.drawLine(self._p2, q2)
+        painter.drawLine(q1, q2)
+        self._draw_arrow(painter, q1, ux, uy)
+        self._draw_arrow(painter, q2, -ux, -uy)
+        mid = QPointF((q1.x()+q2.x())/2, (q1.y()+q2.y())/2)
+        text = self._text_override or f"{length/GRID_UNIT:.3f}"
+        painter.drawText(mid.x()+6, mid.y()-6, text)
+        if self._selected:
+            self._paint_grips(painter)
+
+    def _draw_arrow(self, painter: QPainter, tip: QPointF, ux: float, uy: float):
+        size = 8.0
+        nx, ny = -uy, ux
+        back = QPointF(tip.x()+ux*size, tip.y()+uy*size)
+        pts = QPolygonF([
+            tip,
+            QPointF(back.x()+nx*size*0.35, back.y()+ny*size*0.35),
+            QPointF(back.x()-nx*size*0.35, back.y()-ny*size*0.35),
+        ])
+        painter.drawPolygon(pts)
+
+    def snap_points(self, mode: SnapMode) -> list[QPointF]:
+        if mode == SnapMode.ENDPOINT:
+            return [self._p1, self._p2]
+        if mode == SnapMode.MIDPOINT:
+            q1, q2, *_ = self._geometry()
+            return [QPointF((q1.x()+q2.x())/2, (q1.y()+q2.y())/2)]
+        return []
+
+    def line_segments(self) -> list[QLineF]:
+        q1, q2, *_ = self._geometry()
+        return [QLineF(self._p1, q1), QLineF(self._p2, q2), QLineF(q1, q2)]
+
+    def hit_test(self, pt: QPointF, threshold: float) -> bool:
+        return any(_seg_dist(pt, s.p1(), s.p2()) <= threshold for s in self.line_segments())
+
+    def intersects_rect(self, rect: QRectF, crossing: bool) -> bool:
+        if crossing:
+            for seg in self.line_segments():
+                if rect.contains(seg.p1()) or rect.contains(seg.p2()):
+                    return True
+                for edge in _rect_edges(rect):
+                    itype, _ = seg.intersects(edge)
+                    if itype == QLineF.IntersectionType.BoundedIntersection:
+                        return True
+            return False
+        return rect.contains(self.boundingRect())
+
+    def translate(self, dx: float, dy: float):
+        self.prepareGeometryChange()
+        self._p1 = QPointF(self._p1.x()+dx, self._p1.y()+dy)
+        self._p2 = QPointF(self._p2.x()+dx, self._p2.y()+dy)
+        self.update()
+
+    def scale_about(self, cx: float, cy: float, factor: float):
+        self.prepareGeometryChange()
+        self._p1 = _scale_pt(self._p1, cx, cy, factor)
+        self._p2 = _scale_pt(self._p2, cx, cy, factor)
+        self._offset *= factor
+        self.update()
+
+    def rotate_about(self, cx: float, cy: float, angle_deg: float):
+        self.prepareGeometryChange()
+        cos_a = math.cos(math.radians(angle_deg))
+        sin_a = math.sin(math.radians(angle_deg))
+        self._p1 = _rotate_pt(self._p1, cx, cy, cos_a, sin_a)
+        self._p2 = _rotate_pt(self._p2, cx, cy, cos_a, sin_a)
+        self.update()
+
+    def mirror_across(self, ax: float, ay: float, bx: float, by: float):
+        self.prepareGeometryChange()
+        self._p1 = _mirror_pt(self._p1, ax, ay, bx, by)
+        self._p2 = _mirror_pt(self._p2, ax, ay, bx, by)
+        self._offset = -self._offset
+        self.update()
+
+    def clone(self) -> "DimLinearEntity":
+        return DimLinearEntity(self._p1, self._p2, self._offset,
+                               self._text_override, self.layer)
+
+
+class DimAngularEntity(CADEntity):
+    def __init__(self, center: QPointF, p1: QPointF, p2: QPointF,
+                 radius: float, layer: "Layer" | None = None):
+        super().__init__(layer or Layer("0"))
+        self._center = QPointF(center)
+        self._p1 = QPointF(p1)
+        self._p2 = QPointF(p2)
+        self._radius = float(radius)
+
+    def _angles(self):
+        a1 = math.degrees(math.atan2(-(self._p1.y()-self._center.y()),
+                                      self._p1.x()-self._center.x())) % 360
+        a2 = math.degrees(math.atan2(-(self._p2.y()-self._center.y()),
+                                      self._p2.x()-self._center.x())) % 360
+        span = (a2 - a1) % 360
+        if span > 180:
+            span -= 360
+        return a1, span
+
+    def _point_at(self, deg: float) -> QPointF:
+        rad = math.radians(deg)
+        return QPointF(self._center.x()+self._radius*math.cos(rad),
+                       self._center.y()-self._radius*math.sin(rad))
+
+    def boundingRect(self) -> QRectF:
+        r = self._radius + 20
+        return QRectF(self._center.x()-r, self._center.y()-r, r*2, r*2)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        color = QColor(255, 165, 0) if self._selected else QColor("#ffffff")
+        painter.setPen(QPen(color, 0))
+        painter.setBrush(color)
+        a1, span = self._angles()
+        rect = QRectF(self._center.x()-self._radius, self._center.y()-self._radius,
+                      self._radius*2, self._radius*2)
+        painter.drawArc(rect, int(a1*16), int(span*16))
+        e1 = self._point_at(a1)
+        e2 = self._point_at(a1 + span)
+        painter.drawLine(self._center, e1)
+        painter.drawLine(self._center, e2)
+        sign = 1 if span >= 0 else -1
+        self._draw_tangent_arrow(painter, e1, a1, -sign)
+        self._draw_tangent_arrow(painter, e2, a1 + span, sign)
+        mid_ang = a1 + span/2
+        text_pt = self._point_at(mid_ang)
+        painter.drawText(text_pt.x()+6, text_pt.y()-6, f"{abs(span):.1f}°")
+        if self._selected:
+            self._paint_grips(painter)
+
+    def _draw_tangent_arrow(self, painter: QPainter, tip: QPointF, angle: float, sign: float):
+        rad = math.radians(angle)
+        tx = -math.sin(rad) * sign
+        ty = -math.cos(rad) * sign
+        nx, ny = -ty, tx
+        size = 8.0
+        back = QPointF(tip.x()-tx*size, tip.y()-ty*size)
+        painter.drawPolygon(QPolygonF([
+            tip,
+            QPointF(back.x()+nx*size*0.35, back.y()+ny*size*0.35),
+            QPointF(back.x()-nx*size*0.35, back.y()-ny*size*0.35),
+        ]))
+
+    def snap_points(self, mode: SnapMode) -> list[QPointF]:
+        if mode == SnapMode.CENTER:
+            return [self._center]
+        if mode == SnapMode.ENDPOINT:
+            return [self._p1, self._p2]
+        return []
+
+    def line_segments(self) -> list[QLineF]:
+        pts = [self._point_at(self._angles()[0] + self._angles()[1]*i/24) for i in range(25)]
+        return [QLineF(a, b) for a, b in zip(pts, pts[1:])]
+
+    def hit_test(self, pt: QPointF, threshold: float) -> bool:
+        return any(_seg_dist(pt, s.p1(), s.p2()) <= threshold for s in self.line_segments())
+
+    def intersects_rect(self, rect: QRectF, crossing: bool) -> bool:
+        if crossing:
+            return rect.intersects(self.boundingRect())
+        return rect.contains(self.boundingRect())
+
+    def translate(self, dx: float, dy: float):
+        self.prepareGeometryChange()
+        self._center = QPointF(self._center.x()+dx, self._center.y()+dy)
+        self._p1 = QPointF(self._p1.x()+dx, self._p1.y()+dy)
+        self._p2 = QPointF(self._p2.x()+dx, self._p2.y()+dy)
+        self.update()
+
+    def scale_about(self, cx: float, cy: float, factor: float):
+        self.prepareGeometryChange()
+        self._center = _scale_pt(self._center, cx, cy, factor)
+        self._p1 = _scale_pt(self._p1, cx, cy, factor)
+        self._p2 = _scale_pt(self._p2, cx, cy, factor)
+        self._radius *= abs(factor)
+        self.update()
+
+    def rotate_about(self, cx: float, cy: float, angle_deg: float):
+        self.prepareGeometryChange()
+        cos_a = math.cos(math.radians(angle_deg))
+        sin_a = math.sin(math.radians(angle_deg))
+        self._center = _rotate_pt(self._center, cx, cy, cos_a, sin_a)
+        self._p1 = _rotate_pt(self._p1, cx, cy, cos_a, sin_a)
+        self._p2 = _rotate_pt(self._p2, cx, cy, cos_a, sin_a)
+        self.update()
+
+    def mirror_across(self, ax: float, ay: float, bx: float, by: float):
+        self.prepareGeometryChange()
+        self._center = _mirror_pt(self._center, ax, ay, bx, by)
+        self._p1 = _mirror_pt(self._p1, ax, ay, bx, by)
+        self._p2 = _mirror_pt(self._p2, ax, ay, bx, by)
+        self.update()
+
+    def clone(self) -> "DimAngularEntity":
+        return DimAngularEntity(self._center, self._p1, self._p2,
+                                self._radius, self.layer)
+
+
+class HatchEntity(CADEntity):
+    def __init__(self, boundary: list[QPointF], pattern: str = "ANSI31",
+                 scale: float = 1.0, angle: float = 0.0,
+                 layer: "Layer" | None = None):
+        super().__init__(layer or Layer("0"))
+        self._boundary = [QPointF(p) for p in boundary]
+        self._pattern = pattern
+        self._scale = float(scale)
+        self._angle = float(angle)
+
+    def boundary(self) -> list[QPointF]:
+        return [QPointF(p) for p in self._boundary]
+
+    def boundingRect(self) -> QRectF:
+        if not self._boundary:
+            return QRectF()
+        xs = [p.x() for p in self._boundary]; ys = [p.y() for p in self._boundary]
+        return QRectF(min(xs), min(ys), max(xs)-min(xs), max(ys)-min(ys)).adjusted(-2, -2, 2, 2)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        if len(self._boundary) < 3:
+            return
+        poly = QPolygonF(self._boundary)
+        color = QColor(255, 165, 0) if self._selected else QColor("#ffffff")
+        path = QPainterPath()
+        path.addPolygon(poly)
+        painter.save()
+        if self._pattern == "SOLID":
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(255, 255, 255, 60)))
+            painter.drawPolygon(poly)
+        else:
+            painter.setClipPath(path)
+            painter.setPen(QPen(color, 0))
+            rect = self.boundingRect().adjusted(-100, -100, 100, 100)
+            spacing = max(1.0, 10.0 * self._scale)
+            x = rect.left() - rect.height()
+            while x <= rect.right() + rect.height():
+                painter.drawLine(QPointF(x, rect.bottom()),
+                                 QPointF(x + rect.height(), rect.top()))
+                x += spacing
+        painter.restore()
+        if self._selected:
+            self._paint_grips(painter)
+
+    def snap_points(self, mode: SnapMode) -> list[QPointF]:
+        if mode == SnapMode.ENDPOINT:
+            return [QPointF(p) for p in self._boundary]
+        return []
+
+    def line_segments(self) -> list[QLineF]:
+        pts = self._boundary
+        return [QLineF(pts[i], pts[(i+1) % len(pts)]) for i in range(len(pts))]
+
+    def hit_test(self, pt: QPointF, threshold: float) -> bool:
+        return QPolygonF(self._boundary).containsPoint(pt, Qt.FillRule.OddEvenFill)
+
+    def intersects_rect(self, rect: QRectF, crossing: bool) -> bool:
+        if crossing:
+            return rect.intersects(self.boundingRect())
+        return rect.contains(self.boundingRect())
+
+    def translate(self, dx: float, dy: float):
+        self.prepareGeometryChange()
+        self._boundary = [QPointF(p.x()+dx, p.y()+dy) for p in self._boundary]
+        self.update()
+
+    def rotate_about(self, cx: float, cy: float, angle_deg: float):
+        self.prepareGeometryChange()
+        cos_a = math.cos(math.radians(angle_deg))
+        sin_a = math.sin(math.radians(angle_deg))
+        self._boundary = [_rotate_pt(p, cx, cy, cos_a, sin_a) for p in self._boundary]
+        self._angle = (self._angle + angle_deg) % 360
+        self.update()
+
+    def mirror_across(self, ax: float, ay: float, bx: float, by: float):
+        self.prepareGeometryChange()
+        self._boundary = [_mirror_pt(p, ax, ay, bx, by) for p in self._boundary]
+        self.update()
+
+    def scale_about(self, cx: float, cy: float, factor: float):
+        self.prepareGeometryChange()
+        self._boundary = [_scale_pt(p, cx, cy, factor) for p in self._boundary]
+        self._scale *= abs(factor)
+        self.update()
+
+    def clone(self) -> "HatchEntity":
+        return HatchEntity(self._boundary, self._pattern, self._scale,
+                           self._angle, self.layer)
+
+
+class SplineEntity(CADEntity):
+    def __init__(self, control_points: list[QPointF], closed: bool = False,
+                 layer: "Layer" | None = None):
+        super().__init__(layer or Layer("0"))
+        self._control_points = [QPointF(p) for p in control_points]
+        self._closed = bool(closed)
+
+    def control_points(self) -> list[QPointF]:
+        return [QPointF(p) for p in self._control_points]
+
+    def curve_points(self) -> list[QPointF]:
+        return _catmull_rom_points(self._control_points, self._closed)
+
+    def boundingRect(self) -> QRectF:
+        pts = self.curve_points() or self._control_points
+        if not pts:
+            return QRectF()
+        xs = [p.x() for p in pts]; ys = [p.y() for p in pts]
+        return QRectF(min(xs), min(ys), max(xs)-min(xs), max(ys)-min(ys)).adjusted(-6, -6, 6, 6)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        pts = self.curve_points()
+        if len(pts) < 2:
+            return
+        pen = QPen(self.draw_color, self.layer.lineweight)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        for a, b in zip(pts, pts[1:]):
+            painter.drawLine(a, b)
+        if self._selected:
+            self._paint_grips(painter)
+
+    def snap_points(self, mode: SnapMode) -> list[QPointF]:
+        if not self._control_points:
+            return []
+        if mode == SnapMode.ENDPOINT:
+            return [self._control_points[0], self._control_points[-1]]
+        if mode == SnapMode.MIDPOINT:
+            pts = self.curve_points()
+            return [QPointF((a.x()+b.x())/2, (a.y()+b.y())/2)
+                    for a, b in zip(pts, pts[1:])]
+        return []
+
+    def line_segments(self) -> list[QLineF]:
+        pts = self.curve_points()
+        return [QLineF(a, b) for a, b in zip(pts, pts[1:])]
+
+    def hit_test(self, pt: QPointF, threshold: float) -> bool:
+        return any(_seg_dist(pt, s.p1(), s.p2()) <= threshold for s in self.line_segments())
+
+    def intersects_rect(self, rect: QRectF, crossing: bool) -> bool:
+        if crossing:
+            for seg in self.line_segments():
+                if rect.contains(seg.p1()) or rect.contains(seg.p2()):
+                    return True
+                for edge in _rect_edges(rect):
+                    itype, _ = seg.intersects(edge)
+                    if itype == QLineF.IntersectionType.BoundedIntersection:
+                        return True
+            return False
+        return rect.contains(self.boundingRect())
+
+    def translate(self, dx: float, dy: float):
+        self.prepareGeometryChange()
+        self._control_points = [QPointF(p.x()+dx, p.y()+dy) for p in self._control_points]
+        self.update()
+
+    def rotate_about(self, cx: float, cy: float, angle_deg: float):
+        self.prepareGeometryChange()
+        cos_a = math.cos(math.radians(angle_deg))
+        sin_a = math.sin(math.radians(angle_deg))
+        self._control_points = [_rotate_pt(p, cx, cy, cos_a, sin_a) for p in self._control_points]
+        self.update()
+
+    def mirror_across(self, ax: float, ay: float, bx: float, by: float):
+        self.prepareGeometryChange()
+        self._control_points = [_mirror_pt(p, ax, ay, bx, by) for p in self._control_points]
+        self.update()
+
+    def scale_about(self, cx: float, cy: float, factor: float):
+        self.prepareGeometryChange()
+        self._control_points = [_scale_pt(p, cx, cy, factor) for p in self._control_points]
+        self.update()
+
+    def clone(self) -> "SplineEntity":
+        return SplineEntity(self._control_points, self._closed, self.layer)
+
+
 def _angle_in_span(angle: float, start: float, span: float) -> bool:
     """True if angle (0-360) lies within the arc span."""
     start = start % 360
@@ -491,6 +1244,35 @@ def _circumscribed_circle(p1: QPointF, p2: QPointF, p3: QPointF):
     return center, radius
 
 
+def _catmull_rom_points(pts: list[QPointF], closed: bool, steps: int = 20) -> list[QPointF]:
+    if len(pts) < 2:
+        return [QPointF(p) for p in pts]
+    src = [QPointF(p) for p in pts]
+    count = len(src) if closed else len(src) - 1
+    out = []
+    for i in range(count):
+        p0 = src[(i - 1) % len(src)] if closed or i > 0 else src[0]
+        p1 = src[i % len(src)]
+        p2 = src[(i + 1) % len(src)]
+        p3 = src[(i + 2) % len(src)] if closed or i + 2 < len(src) else src[-1]
+        for j in range(steps):
+            t = j / steps
+            t2 = t * t
+            t3 = t2 * t
+            x = 0.5 * ((2*p1.x()) + (-p0.x()+p2.x())*t +
+                       (2*p0.x()-5*p1.x()+4*p2.x()-p3.x())*t2 +
+                       (-p0.x()+3*p1.x()-3*p2.x()+p3.x())*t3)
+            y = 0.5 * ((2*p1.y()) + (-p0.y()+p2.y())*t +
+                       (2*p0.y()-5*p1.y()+4*p2.y()-p3.y())*t2 +
+                       (-p0.y()+3*p1.y()-3*p2.y()+p3.y())*t3)
+            out.append(QPointF(x, y))
+    if closed:
+        out.append(QPointF(out[0]))
+    else:
+        out.append(QPointF(src[-1]))
+    return out
+
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _rotate_pt(pt: QPointF, cx: float, cy: float, cos_a: float, sin_a: float) -> QPointF:
@@ -511,6 +1293,10 @@ def _mirror_pt(pt: QPointF, ax: float, ay: float, bx: float, by: float) -> QPoin
     px = ax + t * dx
     py = ay + t * dy
     return QPointF(2 * px - pt.x(), 2 * py - pt.y())
+
+
+def _scale_pt(pt: QPointF, cx: float, cy: float, factor: float) -> QPointF:
+    return QPointF(cx + (pt.x()-cx)*factor, cy + (pt.y()-cy)*factor)
 
 
 def _seg_dist(p: QPointF, a: QPointF, b: QPointF) -> float:

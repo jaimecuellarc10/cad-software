@@ -6,7 +6,12 @@
       "Bash(python3 main.py)",
       "Bash(python3 -c \"import sys; from PySide6.QtWidgets import QApplication; from window import MainWindow; app = QApplication\\(sys.argv\\); w = MainWindow\\(\\); print\\('OK'\\)\")",
       "Bash(python3 -c ' *)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(git commit *)",
+      "Skill(codex:rescue)",
+      "Bash(gh auth *)",
+      "Bash(git add *)",
+      "Bash(git rm *)"
     ]
   }
 }

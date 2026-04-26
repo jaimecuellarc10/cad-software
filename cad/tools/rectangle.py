@@ -1,9 +1,10 @@
+import math
 from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QPen, QColor, QPainter
 from .base import BaseTool
 from ..entities import PolylineEntity
 from ..undo import AddEntityCommand
-from ..constants import SnapMode
+from ..constants import GRID_UNIT, SnapMode
 
 
 class RectangleTool(BaseTool):
@@ -24,7 +25,7 @@ class RectangleTool(BaseTool):
     def prompt(self) -> str:
         if self._corner is None:
             return "RECTANGLE  Specify first corner:"
-        return "RECTANGLE  Specify opposite corner  [Esc = cancel]"
+        return "RECTANGLE  Pick corner [W,H=size]"
 
     def snap_extras(self):
         if self._corner is not None:
@@ -60,6 +61,28 @@ class RectangleTool(BaseTool):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.cancel()
 
+    def on_command(self, cmd: str) -> bool:
+        if self._corner is None:
+            return False
+        import re
+        parts = re.split(r'[,\s]+', cmd.strip())
+        try:
+            if len(parts) >= 2:
+                w = float(parts[0]) * GRID_UNIT
+                h = float(parts[1]) * GRID_UNIT
+            else:
+                w = h = float(parts[0]) * GRID_UNIT
+        except ValueError:
+            return False
+        if w < 1 or h < 1:
+            return True
+        cursor = self._cursor or QPointF(self._corner.x() + w, self._corner.y() + h)
+        sx = 1 if cursor.x() >= self._corner.x() else -1
+        sy = 1 if cursor.y() >= self._corner.y() else -1
+        opp = QPointF(self._corner.x() + sx * w, self._corner.y() + sy * h)
+        self._commit(opp)
+        return True
+
     def cancel(self):
         self._corner = None
         self._cursor = None
@@ -86,6 +109,10 @@ class RectangleTool(BaseTool):
             min(c1.x(), c2.x()), min(c1.y(), c2.y()),
             abs(c2.x()-c1.x()), abs(c2.y()-c1.y())
         ))
+        dx = abs(self._cursor.x() - self._corner.x()) / GRID_UNIT
+        dy = abs(self._cursor.y() - self._corner.y()) / GRID_UNIT
+        painter.setPen(QPen(QColor('#ffffff'), 1))
+        painter.drawText(c2.x() + 6, c2.y() - 6, f'{dx:.2f} × {dy:.2f}')
 
     # ── Commit ────────────────────────────────────────────────────────────────
 

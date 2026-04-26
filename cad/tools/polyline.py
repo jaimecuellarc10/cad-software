@@ -1,9 +1,23 @@
+import math
 from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QPen, QColor, QPainter
 from .base import BaseTool
 from ..entities import PolylineEntity
 from ..undo import AddEntityCommand
-from ..constants import SnapMode
+from ..constants import GRID_UNIT, SnapMode
+
+
+def _direction_pt(anchor: QPointF, cursor: QPointF, dist_units: float) -> QPointF:
+    dx = cursor.x() - anchor.x()
+    dy = cursor.y() - anchor.y()
+    length = math.hypot(dx, dy)
+    if length < 1e-6:
+        dx, dy = 1.0, 0.0
+    else:
+        dx /= length
+        dy /= length
+    scene_dist = dist_units * GRID_UNIT
+    return QPointF(anchor.x() + dx * scene_dist, anchor.y() + dy * scene_dist)
 
 
 class PolylineTool(BaseTool):
@@ -40,8 +54,8 @@ class PolylineTool(BaseTool):
         if n == 0:
             return "PLINE  Specify start point:"
         if n == 1:
-            return "PLINE  Specify next point  [Enter/Space = done  Esc = cancel]"
-        return f"PLINE  Specify next point  [{n} pts]  [C = Close  Enter/Space = done]"
+            return "PLINE  Specify next point  [type distance + Enter]  [Enter/Space = done  Esc = cancel]"
+        return f"PLINE  Specify next point  [{n} pts]  [type distance + Enter]  [C = Close  Enter/Space = done]"
 
     def activate(self, view):
         super().activate(view)
@@ -80,6 +94,19 @@ class PolylineTool(BaseTool):
         elif key == Qt.Key.Key_C and len(self._verts) >= 2:
             self._finish(close=True)
 
+    def on_command(self, cmd: str) -> bool:
+        if not self._verts or self._cursor_pt is None:
+            return False
+        try:
+            dist = float(cmd)
+        except ValueError:
+            return False
+        end = _direction_pt(self._verts[-1], self._cursor_pt, dist)
+        self._verts.append(end)
+        if self.view:
+            self.view.viewport().update()
+        return True
+
     def finish(self):
         self._finish()
 
@@ -112,6 +139,13 @@ class PolylineTool(BaseTool):
             p1 = v.mapFromScene(self._verts[-1])
             p2 = v.mapFromScene(self._cursor_pt)
             painter.drawLine(p1, p2)
+            dx = self._cursor_pt.x() - self._verts[-1].x()
+            dy = self._cursor_pt.y() - self._verts[-1].y()
+            dist_units = math.hypot(dx, dy) / GRID_UNIT
+            mid = v.mapFromScene(QPointF((self._verts[-1].x() + self._cursor_pt.x()) / 2,
+                                         (self._verts[-1].y() + self._cursor_pt.y()) / 2))
+            painter.setPen(QPen(QColor('#ffffff'), 1))
+            painter.drawText(mid.x() + 6, mid.y() - 6, f'{dist_units:.2f}')
 
         # Small dot at each placed vertex
         dot_pen = QPen(COLOR, 4)

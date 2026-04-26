@@ -161,6 +161,15 @@ class CADView(QGraphicsView):
 
         super().mousePressEvent(event)
 
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        if self.current_tool:
+            raw     = self.mapToScene(event.position().toPoint())
+            snapped = self._snap_result.point if self._snap_result else raw
+            self.current_tool.on_press(snapped, event)
+            self._update_prompt()
+
+        super().mouseDoubleClickEvent(event)
+
     def mouseMoveEvent(self, event: QMouseEvent):
         # Pan
         if self._pan_origin and (event.buttons() & Qt.MouseButton.MiddleButton):
@@ -188,6 +197,10 @@ class CADView(QGraphicsView):
 
         if self.current_tool:
             self.current_tool.on_move(self._snap_result.point, raw, event)
+            if getattr(self.current_tool, "_hovered_entity", None) is not None:
+                self.setCursor(Qt.CursorShape.PointingHandCursor)
+            else:
+                self.setCursor(Qt.CursorShape.CrossCursor)
 
         self.viewport().update()
         super().mouseMoveEvent(event)
@@ -202,12 +215,48 @@ class CADView(QGraphicsView):
             raw     = self.mapToScene(event.position().toPoint())
             snapped = self._snap_result.point if self._snap_result else raw
             self.current_tool.on_release(snapped, event)
+            self._update_prompt()
 
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event: QWheelEvent):
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
+        current = self.transform().m11()
+        new_scale = current * factor
+        if new_scale < 0.01 or new_scale > 500:
+            return
         self.scale(factor, factor)
+
+    def zoom_extents(self, margin_factor: float = 1.15):
+        entities = self.cad_scene.all_entities()
+        if not entities:
+            return
+        from .entities import LineEntity, PolylineEntity, CircleEntity, ArcEntity
+        import math
+        xs, ys = [], []
+        for e in entities:
+            if isinstance(e, LineEntity):
+                xs += [e.p1.x(), e.p2.x()]; ys += [e.p1.y(), e.p2.y()]
+            elif isinstance(e, PolylineEntity):
+                for v in e.vertices():
+                    xs.append(v.x()); ys.append(v.y())
+            elif isinstance(e, CircleEntity):
+                xs += [e.center.x()-e.radius, e.center.x()+e.radius]
+                ys += [e.center.y()-e.radius, e.center.y()+e.radius]
+            elif isinstance(e, ArcEntity):
+                xs += [e.center.x()-e.radius, e.center.x()+e.radius]
+                ys += [e.center.y()-e.radius, e.center.y()+e.radius]
+        if not xs:
+            return
+        from PySide6.QtCore import QRectF
+        rect = QRectF(min(xs), min(ys), max(xs)-min(xs), max(ys)-min(ys))
+        if rect.width() < 1 and rect.height() < 1:
+            rect = QRectF(rect.center().x()-50, rect.center().y()-50, 100, 100)
+        rect = rect.adjusted(-rect.width()*(margin_factor-1)/2,
+                              -rect.height()*(margin_factor-1)/2,
+                               rect.width()*(margin_factor-1)/2,
+                               rect.height()*(margin_factor-1)/2)
+        self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
     # ── Keyboard ─────────────────────────────────────────────────────────────
 
@@ -236,6 +285,14 @@ class CADView(QGraphicsView):
                 self.current_tool.on_key(event)
                 self._update_prompt()
 
+        elif key == Qt.Key.Key_Tab:
+            if self._command_bar and self._command_bar.has_input():
+                self._command_bar.submit()
+            elif self.current_tool:
+                self.current_tool.on_key(event)
+                self._update_prompt()
+            return
+
         elif key == Qt.Key.Key_Backspace and mods == Qt.KeyboardModifier.NoModifier:
             if self._command_bar and self._command_bar.has_input():
                 self._command_bar.feed_backspace()
@@ -257,7 +314,8 @@ class CADView(QGraphicsView):
         elif event.matches(QKeySequence.StandardKey.Paste):
             self._paste_from_clipboard()
 
-        elif (mods == Qt.KeyboardModifier.NoModifier
+        elif ((mods == Qt.KeyboardModifier.NoModifier or
+               mods == Qt.KeyboardModifier.KeypadModifier)
               and text and text.isprintable() and not text.isspace()):
             # Route printable characters to command bar
             if self._command_bar:

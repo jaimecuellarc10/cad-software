@@ -65,6 +65,9 @@ class CommandBar(QWidget):
     def set_prompt(self, text: str):
         self._prompt_label.setText(text)
 
+    def add_history(self, text: str):
+        self._hist_label.setText(text)
+
     def feed_char(self, ch: str):
         self._buffer += ch.upper()
         self._refresh_input()
