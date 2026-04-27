@@ -18,6 +18,7 @@ class SnapManager:
             SnapMode.GRID,
         }
         self.grid_snap_enabled = True
+        self.ortho_enabled = False
 
     def snap(self, cursor_scene: QPointF, entities: list, view_scale: float,
              extra_points: list | None = None) -> SnapResult:
@@ -60,11 +61,24 @@ class SnapManager:
                         best_dist, best_pt, best_mode = d, pt, mode
 
         if best_pt is not None:
-            return SnapResult(best_pt, best_mode)
+            result = QPointF(best_pt)
+            mode = best_mode
+        elif self.grid_snap_enabled:
+            result = _grid_snap(cursor_scene)
+            mode = SnapMode.GRID
+        else:
+            result = QPointF(cursor_scene)
+            mode = SnapMode.NONE
 
-        if self.grid_snap_enabled:
-            return SnapResult(_grid_snap(cursor_scene), SnapMode.GRID)
-        return SnapResult(QPointF(cursor_scene), SnapMode.NONE)
+        if self.ortho_enabled and extra_points:
+            base = extra_points[0][0] if isinstance(extra_points[0], tuple) else extra_points[0]
+            dx = abs(result.x() - base.x())
+            dy = abs(result.y() - base.y())
+            if dx >= dy:
+                result = QPointF(result.x(), base.y())
+            else:
+                result = QPointF(base.x(), result.y())
+        return SnapResult(result, mode)
 
 
 def _dist(a: QPointF, b: QPointF) -> float:

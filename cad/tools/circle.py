@@ -71,6 +71,12 @@ class CircleTool(BaseTool):
             self.cancel()
 
     def on_command(self, cmd: str) -> bool:
+        coord = self._parse_coord(cmd)
+        if coord is not None and self._center is None:
+            self._center = coord
+            if self.view:
+                self.view.viewport().update()
+            return True
         if self._center is None:
             return False
         text = cmd.strip()

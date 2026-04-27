@@ -31,7 +31,7 @@ class ScaleTool(BaseTool):
         self._dragging  = False
 
     @property
-    def is_idle(self): return self._state != STATE_FACTOR
+    def is_idle(self): return False
 
     @property
     def prompt(self):
@@ -77,6 +77,8 @@ class ScaleTool(BaseTool):
     def finish(self):
         if self._state == STATE_SELECT and self._entities:
             self._confirm_selection()
+        elif self._state == STATE_FACTOR and self._base is not None:
+            self._commit(self._current_factor())
         else:
             self.cancel()
 

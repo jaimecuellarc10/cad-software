@@ -198,6 +198,72 @@ class LineEntity(CADEntity):
         return LineEntity(self._p1, self._p2, self.layer, self.linetype, self.lineweight)
 
 
+class PointEntity(CADEntity):
+    def __init__(self, pos: QPointF, layer: Layer):
+        super().__init__(layer)
+        self._pos = QPointF(pos)
+
+    @property
+    def pos(self) -> QPointF:
+        return QPointF(self._pos)
+
+    def snap_points(self, mode: SnapMode) -> list[QPointF]:
+        if mode == SnapMode.ENDPOINT:
+            return [QPointF(self._pos)]
+        return []
+
+    def line_segments(self) -> list[QLineF]:
+        return []
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(self._pos.x() - 5, self._pos.y() - 5, 10, 10)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        pen = QPen(self.draw_color, 0)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        scale = painter.transform().m11()
+        s = 3 / scale if scale else 3
+        painter.drawLine(QPointF(self._pos.x() - s, self._pos.y()),
+                         QPointF(self._pos.x() + s, self._pos.y()))
+        painter.drawLine(QPointF(self._pos.x(), self._pos.y() - s),
+                         QPointF(self._pos.x(), self._pos.y() + s))
+        painter.drawPoint(self._pos)
+        if self._selected:
+            self._paint_grips(painter)
+
+    def hit_test(self, pt: QPointF, threshold: float) -> bool:
+        return math.hypot(pt.x() - self._pos.x(), pt.y() - self._pos.y()) <= threshold
+
+    def intersects_rect(self, rect: QRectF, crossing: bool) -> bool:
+        return rect.contains(self._pos)
+
+    def translate(self, dx: float, dy: float):
+        self.prepareGeometryChange()
+        self._pos = QPointF(self._pos.x() + dx, self._pos.y() + dy)
+        self.update()
+
+    def scale_about(self, cx: float, cy: float, factor: float):
+        self.prepareGeometryChange()
+        self._pos = _scale_pt(self._pos, cx, cy, factor)
+        self.update()
+
+    def rotate_about(self, cx: float, cy: float, angle_deg: float):
+        self.prepareGeometryChange()
+        cos_a = math.cos(math.radians(angle_deg))
+        sin_a = math.sin(math.radians(angle_deg))
+        self._pos = _rotate_pt(self._pos, cx, cy, cos_a, sin_a)
+        self.update()
+
+    def mirror_across(self, ax: float, ay: float, bx: float, by: float):
+        self.prepareGeometryChange()
+        self._pos = _mirror_pt(self._pos, ax, ay, bx, by)
+        self.update()
+
+    def clone(self) -> "PointEntity":
+        return PointEntity(self._pos, self.layer)
+
+
 # ── Polyline ──────────────────────────────────────────────────────────────────
 
 class PolylineEntity(CADEntity):

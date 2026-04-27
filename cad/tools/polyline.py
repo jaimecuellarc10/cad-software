@@ -140,6 +140,12 @@ class PolylineTool(BaseTool):
             self._finish(close=True)
 
     def on_command(self, cmd: str) -> bool:
+        coord = self._parse_coord(cmd)
+        if coord is not None and not self._verts:
+            self._verts.append(coord)
+            if self.view:
+                self.view.viewport().update()
+            return True
         if not self._verts or self._cursor_pt is None:
             return False
         stripped = cmd.strip()

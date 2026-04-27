@@ -2,6 +2,7 @@ import math
 from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QPen, QColor, QPainter
 from .base import BaseTool
+from ._ghost import GHOST_PEN
 from ..entities import LineEntity, PolylineEntity, CircleEntity
 from ..undo import AddEntityCommand
 from ..constants import GRID_UNIT
@@ -15,6 +16,7 @@ STATE_SIDE = 2
 
 class OffsetTool(BaseTool):
     name = "offset"
+    _last_dist: float = 0.0
 
     def __init__(self):
         super().__init__()
@@ -25,13 +27,13 @@ class OffsetTool(BaseTool):
 
     @property
     def is_idle(self):
-        return self._state == STATE_DISTANCE
+        return False
 
     @property
     def prompt(self):
         if self._state == STATE_DISTANCE:
-            d = self._dist / GRID_UNIT if self._dist else 0
-            return f"OFFSET  Specify offset distance ({d:.2f}):  [type + Enter]"
+            d = self._dist / GRID_UNIT if self._dist else 0.0
+            return f"OFFSET  Dist: {d:.2f}  [type new dist or Enter]"
         if self._state == STATE_PICK:
             return "OFFSET  Select object to offset:"
         return "OFFSET  Specify side to offset toward:"
@@ -39,6 +41,7 @@ class OffsetTool(BaseTool):
     def activate(self, view):
         super().activate(view)
         self._state = STATE_DISTANCE
+        self._dist = self._last_dist
         self._picked = None
         self._cursor = None
 
@@ -59,6 +62,19 @@ class OffsetTool(BaseTool):
             except ValueError:
                 return False
         return False
+
+    def on_key(self, event):
+        if event.key() not in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            return
+        self.finish()
+
+    def finish(self):
+        if self._state == STATE_DISTANCE:
+            self._state = STATE_PICK
+            if self.view:
+                self.view.viewport().update()
+        elif self._state == STATE_PICK:
+            self.cancel()
 
     def on_press(self, snapped: QPointF, event):
         if event.button() != Qt.MouseButton.LeftButton:
@@ -84,12 +100,13 @@ class OffsetTool(BaseTool):
         if self._state != STATE_SIDE or self._picked is None or self._cursor is None:
             return
         side = _which_side(self._picked, self._cursor)
-        preview = _make_offset(self._picked, self._dist, side)
+        dist = self._effective_dist(self._cursor)
+        preview = _make_offset(self._picked, dist, side)
         if preview is None:
             return
         v = self.view
         scale = v.transform().m11()
-        painter.setPen(QPen(PREVIEW_COLOR, 1.5, Qt.PenStyle.SolidLine))
+        painter.setPen(GHOST_PEN)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         if isinstance(preview, list):
             vps = [QPointF(v.mapFromScene(p)) for p in preview]
@@ -101,6 +118,9 @@ class OffsetTool(BaseTool):
             c = QPointF(v.mapFromScene(preview[0]))
             r = preview[1] * scale
             painter.drawEllipse(c, r, r)
+        cp = v.mapFromScene(self._cursor)
+        painter.setPen(QPen(PREVIEW_COLOR, 1))
+        painter.drawText(cp.x()+8, cp.y()-8, f"{dist/GRID_UNIT:.2f}u")
 
     def _pick_entity(self, pt: QPointF):
         threshold = 8.0 / self.view.transform().m11()
@@ -116,7 +136,8 @@ class OffsetTool(BaseTool):
         if self._picked is None:
             return
         side = _which_side(self._picked, side_pt)
-        preview = _make_offset(self._picked, self._dist, side)
+        dist = self._effective_dist(side_pt)
+        preview = _make_offset(self._picked, dist, side)
         if preview is None:
             self._state = STATE_PICK
             self._picked = None
@@ -131,10 +152,17 @@ class OffsetTool(BaseTool):
             ent = CircleEntity(preview[0], preview[1], layer)
         if ent is not None:
             self.view.undo_stack.push(AddEntityCommand(self.view.cad_scene, ent))
+            self._dist = dist
+            OffsetTool._last_dist = dist
         self._state = STATE_PICK
         self._picked = None
         if self.view:
             self.view.viewport().update()
+
+    def _effective_dist(self, pt: QPointF) -> float:
+        if self._dist > 0:
+            return self._dist
+        return _distance_to_entity(self._picked, pt)
 
 
 def _which_side(ent, cursor: QPointF) -> float:
@@ -171,6 +199,28 @@ def _seg_normal(a: QPointF, b: QPointF):
     if length < 1e-9:
         return 0.0, 1.0
     return -dy/length, dx/length
+
+
+def _distance_to_entity(ent, pt: QPointF) -> float:
+    if isinstance(ent, LineEntity):
+        return _point_line_distance(pt, ent.p1, ent.p2)
+    if isinstance(ent, PolylineEntity):
+        segs = ent.segments()
+        if not segs:
+            return 0.0
+        return min(_point_line_distance(pt, a, b) for a, b in segs)
+    if isinstance(ent, CircleEntity):
+        return abs(math.hypot(pt.x()-ent.center.x(), pt.y()-ent.center.y()) - ent.radius)
+    return 0.0
+
+
+def _point_line_distance(pt: QPointF, a: QPointF, b: QPointF) -> float:
+    dx = b.x() - a.x()
+    dy = b.y() - a.y()
+    length = math.hypot(dx, dy)
+    if length < 1e-9:
+        return math.hypot(pt.x() - a.x(), pt.y() - a.y())
+    return abs((pt.x() - a.x()) * dy - (pt.y() - a.y()) * dx) / length
 
 
 def _make_offset(ent, dist: float, side: float):

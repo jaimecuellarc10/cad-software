@@ -62,6 +62,12 @@ class RectangleTool(BaseTool):
             self.cancel()
 
     def on_command(self, cmd: str) -> bool:
+        coord = self._parse_coord(cmd)
+        if coord is not None and self._corner is None:
+            self._corner = coord
+            if self.view:
+                self.view.viewport().update()
+            return True
         if self._corner is None:
             return False
         import re

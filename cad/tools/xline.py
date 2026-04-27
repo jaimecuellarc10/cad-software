@@ -55,6 +55,10 @@ class XLineTool(BaseTool):
         return False
 
     def on_press(self, snapped: QPointF, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            if self._point is not None:
+                self.finish()
+            return
         if event.button() != Qt.MouseButton.LeftButton: return
         if self._state == STATE_POINT:
             self._point = QPointF(snapped)
@@ -73,6 +77,9 @@ class XLineTool(BaseTool):
     def cancel(self):
         self._point = self._cursor = None; self._state = STATE_POINT
         if self.view: self.view.viewport().update()
+
+    def finish(self):
+        self.cancel()
 
     def draw_overlay(self, painter: QPainter):
         if self._state != STATE_DIR or self._point is None or self._cursor is None:

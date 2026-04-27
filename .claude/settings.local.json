@@ -14,7 +14,9 @@
       "Bash(git rm *)",
       "Bash(git push *)",
       "Bash(python3 -c \"import cad.tools.trim, cad.tools.extend, cad.view; print\\('OK'\\)\")",
-      "Bash(python3 -c \"import cad.view, cad.tools.trim; print\\('OK'\\)\")"
+      "Bash(python3 -c \"import cad.view, cad.tools.trim; print\\('OK'\\)\")",
+      "Bash(node *)",
+      "Bash(python3 -c \"import window; print\\('OK'\\)\")"
     ]
   }
 }

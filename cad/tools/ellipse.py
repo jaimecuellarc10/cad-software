@@ -12,6 +12,19 @@ STATE_AXIS1  = 1
 STATE_AXIS2  = 2
 
 
+def _direction_pt(anchor: QPointF, cursor: QPointF, dist_units: float) -> QPointF:
+    dx = cursor.x() - anchor.x()
+    dy = cursor.y() - anchor.y()
+    length = math.hypot(dx, dy)
+    if length < 1e-6:
+        dx, dy = 1.0, 0.0
+    else:
+        dx /= length
+        dy /= length
+    scene_dist = dist_units * GRID_UNIT
+    return QPointF(anchor.x() + dx * scene_dist, anchor.y() + dy * scene_dist)
+
+
 class EllipseTool(BaseTool):
     name = "ellipse"
 
@@ -51,18 +64,36 @@ class EllipseTool(BaseTool):
         super().deactivate()
 
     def on_command(self, cmd: str) -> bool:
-        if self._state != STATE_AXIS2:
+        coord = self._parse_coord(cmd)
+        if coord is not None and self._state == STATE_CENTER:
+            self._center = coord
+            self._state = STATE_AXIS1
+            if self.view:
+                self.view.viewport().update()
+            return True
+        if self._state not in (STATE_AXIS1, STATE_AXIS2):
             return False
         try:
-            ry_units = float(cmd)
+            units = float(cmd)
         except ValueError:
             return False
-        if ry_units <= 0:
+        if units <= 0:
             return True
-        self._commit_with_ry(ry_units * GRID_UNIT)
+        if self._state == STATE_AXIS1:
+            cursor = self._cursor or QPointF(self._center.x() + GRID_UNIT, self._center.y())
+            self._axis1 = _direction_pt(self._center, cursor, units)
+            self._state = STATE_AXIS2
+            if self.view:
+                self.view.viewport().update()
+            return True
+        self._commit_with_ry(units * GRID_UNIT)
         return True
 
     def on_press(self, snapped: QPointF, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            if self._state != STATE_CENTER:
+                self.cancel()
+            return
         if event.button() != Qt.MouseButton.LeftButton:
             return
         if self._state == STATE_CENTER:
@@ -97,7 +128,12 @@ class EllipseTool(BaseTool):
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
         if self._state == STATE_AXIS1:
+            dist = math.hypot(self._cursor.x()-self._center.x(),
+                              self._cursor.y()-self._center.y()) / GRID_UNIT
+            cp = v.mapFromScene(self._cursor)
+            painter.setPen(QPen(PREVIEW_COLOR, 1.5, Qt.PenStyle.DashLine))
             painter.drawLine(v.mapFromScene(self._center), v.mapFromScene(self._cursor))
+            painter.drawText(cp.x()+8, cp.y()-8, f"{dist:.2f}u")
             return
 
         if self._state == STATE_AXIS2 and self._axis1 is not None:

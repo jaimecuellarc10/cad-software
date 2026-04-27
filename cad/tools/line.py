@@ -125,6 +125,12 @@ class LineTool(BaseTool):
             self.cancel()
 
     def on_command(self, cmd: str) -> bool:
+        coord = self._parse_coord(cmd)
+        if coord is not None and self._start is None:
+            self._start = coord
+            if self.view:
+                self.view.viewport().update()
+            return True
         if self._start is None or self._cursor is None:
             return False
         stripped = cmd.strip()

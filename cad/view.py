@@ -347,6 +347,12 @@ class CADView(QGraphicsView):
             state = "ON" if self.snap_manager.grid_snap_enabled else "OFF"
             self.status_bar.showMessage(f"Grid snap {state}", 2000)
 
+        elif key == Qt.Key.Key_F8:
+            self.snap_manager.ortho_enabled = not self.snap_manager.ortho_enabled
+            state = "ON" if self.snap_manager.ortho_enabled else "OFF"
+            self.status_bar.showMessage(f"Ortho {state}", 2000)
+            self.viewport().update()
+
         elif event.matches(QKeySequence.StandardKey.Undo):
             self.undo_stack.undo()
 

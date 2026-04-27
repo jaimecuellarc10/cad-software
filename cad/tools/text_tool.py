@@ -67,6 +67,14 @@ class TextTool(BaseTool):
             self.view.viewport().update()
 
     def on_command(self, cmd: str) -> bool:
+        coord = self._parse_coord(cmd)
+        if coord is not None and self._state == STATE_POS:
+            self._pos = coord
+            self._buffer = ""
+            self._state = STATE_INPUT
+            if self.view:
+                self.view.viewport().update()
+            return True
         if self._state == STATE_INPUT and self._pos is not None:
             self._commit(cmd)
             return True

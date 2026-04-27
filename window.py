@@ -40,6 +40,8 @@ from cad.tools.dimension import DimLinearTool, DimAngularTool
 from cad.tools.hatch     import HatchTool
 from cad.tools.spline    import SplineTool
 from cad.tools.lengthen  import LengthenTool
+from cad.tools.erase     import EraseTool
+from cad.tools.point_tool import PointTool
 
 # ── AutoCAD command aliases ───────────────────────────────────────────────────
 COMMANDS: dict[str, str] = {
@@ -88,6 +90,8 @@ COMMANDS: dict[str, str] = {
     "H": "hatch", "HATCH": "hatch", "BH": "hatch",
     "SPL": "spline", "SPLINE": "spline",
     "LEN": "lengthen", "LENGTHEN": "lengthen",
+    "E": "erase", "ERASE": "erase", "DEL": "erase",
+    "PO": "point", "POINT": "point",
     # Trim
     "TR": "trim", "TRIM": "trim",
     # Extend
@@ -128,6 +132,8 @@ TOOL_OPTIONS: dict[str, dict[str, str]] = {
     "hatch":     {},
     "spline":    {},
     "lengthen":  {},
+    "erase":     {},
+    "point":     {},
 }
 
 
@@ -205,6 +211,8 @@ class MainWindow(QMainWindow):
         self._hatch_tool     = HatchTool()
         self._spline_tool    = SplineTool()
         self._lengthen_tool  = LengthenTool()
+        self._erase_tool     = EraseTool()
+        self._point_tool     = PointTool()
 
         self._last_draw_tool: str | None = None
 
@@ -254,6 +262,7 @@ class MainWindow(QMainWindow):
             "Ellipse  [EL]\nClick center -> axis1 endpoint -> axis2 half-length")
         add("polygon", "Polygon", "Polygon  [POL]\nType sides, pick center, pick/type radius")
         add("xline",   "XLine",   "XLine  [XLINE]\nInfinite construction line")
+        add("point",   "Point",   "Point  [PO]\nPlace points")
         add("text",    "Text",    "Text  [T]\nPick insertion point, then type text")
         add("spline",  "Spline",  "Spline  [SPL]\nClick control points, Enter/Space = done")
         add("hatch",   "Hatch",   "Hatch  [H]\nClick inside a closed region")
@@ -283,6 +292,7 @@ class MainWindow(QMainWindow):
         add("explode", "Explode", "Explode  [X]\nBreak polyline into individual line segments")
         add("join",    "Join",    "Join  [J]\nMerge touching lines/polylines into one polyline")
         add("lengthen", "Lengthen", "Lengthen  [LEN]\nType delta, then click an endpoint")
+        add("erase",    "Erase", "Erase  [E]\nSelect objects, Enter/Space = delete")
         tb.addSeparator()
         add("trim",      "Trim",
             "Trim  [TR]\nClick the part of a line to trim (needs intersecting geometry)")
@@ -306,6 +316,13 @@ class MainWindow(QMainWindow):
         grid.setToolTip("GRID snap  [F9]")
         grid.toggled.connect(self._toggle_grid_snap)
         sb.addAction(grid)
+
+        ortho = QAction("Ortho", self)
+        ortho.setCheckable(True)
+        ortho.setChecked(self.snap_manager.ortho_enabled)
+        ortho.setToolTip("ORTHO  [F8]")
+        ortho.toggled.connect(self._toggle_ortho)
+        sb.addAction(ortho)
 
         snap_defs = [
             (SnapMode.ENDPOINT,     "Endpoint",     "ENDpoint  —  yellow square"),
@@ -419,6 +436,8 @@ class MainWindow(QMainWindow):
             "hatch":     self._hatch_tool,
             "spline":    self._spline_tool,
             "lengthen":  self._lengthen_tool,
+            "erase":     self._erase_tool,
+            "point":     self._point_tool,
         }
         tool = tool_map.get(name)
         if tool is None:
@@ -446,3 +465,7 @@ class MainWindow(QMainWindow):
 
     def _toggle_grid_snap(self, enabled: bool):
         self.snap_manager.grid_snap_enabled = enabled
+
+    def _toggle_ortho(self, enabled: bool):
+        self.snap_manager.ortho_enabled = enabled
+        self.view.viewport().update()

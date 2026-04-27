@@ -34,7 +34,7 @@ class RotateTool(BaseTool):
 
     @property
     def is_idle(self) -> bool:
-        return self._state != STATE_DRAG
+        return False
 
     @property
     def prompt(self) -> str:

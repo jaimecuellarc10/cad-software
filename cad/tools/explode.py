@@ -24,7 +24,7 @@ class ExplodeTool(BaseTool):
         self._dragging  = False
 
     @property
-    def is_idle(self): return True
+    def is_idle(self): return False
 
     @property
     def prompt(self):

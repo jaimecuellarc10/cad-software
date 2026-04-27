@@ -2,7 +2,7 @@ import math
 from PySide6.QtCore import Qt, QPointF, QPoint, QRect, QRectF, QLineF
 from PySide6.QtGui import QPen, QColor, QPainter, QBrush
 from .base import BaseTool
-from ..entities import LineEntity, PolylineEntity
+from ..entities import LineEntity, PolylineEntity, XLineEntity
 from ..undo import DeleteEntitiesCommand, ReplaceEntityCommand, SplitEntityCommand
 
 PREVIEW_COLOR = QColor("#ffffff")
@@ -282,6 +282,13 @@ def _entity_segments(ent) -> list[tuple[QPointF, QPointF]]:
         return [(ent.p1, ent.p2)]
     if isinstance(ent, PolylineEntity):
         return ent.segments()
+    if isinstance(ent, XLineEntity):
+        rad = math.radians(ent.angle_deg)
+        dx = math.cos(rad) * 45000.0
+        dy = math.sin(rad) * 45000.0
+        center = ent.point
+        return [(QPointF(center.x() - dx, center.y() + dy),
+                 QPointF(center.x() + dx, center.y() - dy))]
     return []
 
 
@@ -319,8 +326,8 @@ def _segment_line_intersection_t(a: QPointF, b: QPointF,
 
 
 def _trim_entity_parts(ent, seg_idx: int, click_pt: QPointF, cut_edges: list):
-    if isinstance(ent, LineEntity):
-        a, b = ent.p1, ent.p2
+    if isinstance(ent, (LineEntity, XLineEntity)):
+        a, b = _entity_segments(ent)[0]
         cuts = _segment_cut_params(ent, seg_idx, a, b, cut_edges)
         if not cuts:
             return None
@@ -365,8 +372,8 @@ def _trim_removed_segments(ent, click_pt: QPointF | None, cut_edges: list):
         if best_dist is None or d < best_dist:
             best_dist = d
             best_idx = i
-    if isinstance(ent, LineEntity):
-        a, b = ent.p1, ent.p2
+    if isinstance(ent, (LineEntity, XLineEntity)):
+        a, b = _entity_segments(ent)[0]
         cuts = _segment_cut_params(ent, 0, a, b, cut_edges)
         if not cuts:
             return []

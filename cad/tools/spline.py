@@ -58,6 +58,12 @@ class SplineTool(BaseTool):
             self._finish(close=True)
 
     def on_command(self, cmd: str) -> bool:
+        coord = self._parse_coord(cmd)
+        if coord is not None and not self._points:
+            self._points.append(coord)
+            if self.view:
+                self.view.viewport().update()
+            return True
         if cmd.strip().upper() == "C":
             self._finish(close=True)
             return True
