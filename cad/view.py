@@ -115,10 +115,10 @@ class CADView(QGraphicsView):
         painter = QPainter(self.viewport())
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
+        self._draw_hover_feedback(painter)
+
         if self.current_tool:
             self.current_tool.draw_overlay(painter)
-
-        self._draw_hover_feedback(painter)
 
         if self._snap_result and self._snap_result.mode != SnapMode.GRID:
             self._draw_snap_marker(painter, self._snap_result)
