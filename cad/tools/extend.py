@@ -84,13 +84,20 @@ class ExtendTool(BaseTool):
     def on_press(self, snapped: QPointF, event):
         if event.button() != Qt.MouseButton.LeftButton:
             return
+        is_double = event.type() == QEvent.Type.MouseButtonDblClick
+        if self._state == STATE_EXTEND and is_double:
+            self._last_click_was_double = True
+            self._extend_through(snapped)
+            if self.view:
+                self.view.viewport().update()
+            return
         if self._last_click_was_double and event.type() != QEvent.Type.MouseButtonDblClick:
             self._last_click_was_double = False
             return
         self._press_vp = event.position().toPoint()
         self._cur_vp = self._press_vp
         self._dragging = False
-        self._double_click = event.type() == QEvent.Type.MouseButtonDblClick
+        self._double_click = is_double
         if self._double_click:
             self._last_click_was_double = True
 
@@ -129,7 +136,7 @@ class ExtendTool(BaseTool):
             p2 = self.view.mapToScene(event.position().toPoint())
             self._do_box_extend(p1, p2)
         else:
-            self._do_extend(snapped, through=self._double_click)
+            self._extend_single(snapped)
         self._press_vp = None
         self._cur_vp = None
         self._dragging = False
@@ -220,7 +227,10 @@ class ExtendTool(BaseTool):
 
     # ── Extend logic ──────────────────────────────────────────────────────────
 
-    def _do_extend(self, click_pt: QPointF, through: bool = False):
+    def _extend_single(self, click_pt: QPointF):
+        self._do_extend(click_pt)
+
+    def _extend_through(self, click_pt: QPointF):
         scene     = self.view.cad_scene
         entities  = scene.all_entities()
         boundaries = [ent for ent in self._boundaries if ent in entities]
@@ -231,15 +241,18 @@ class ExtendTool(BaseTool):
         if target is None:
             return
         hit_entity, hit_seg_idx, extend_end, fixed_end, endpoint, direction = target
-        origin = endpoint
 
         dir_len  = math.hypot(direction.x(), direction.y())
         if dir_len < 1e-9:
             return
+        unit_dir = QPointF(direction.x() / dir_len, direction.y() / dir_len)
+        origin = QPointF(endpoint)
 
         steps = 0
         while True:
-            best = _find_next_boundary(origin, direction, boundaries, hit_entity)
+            ray_origin = QPointF(origin.x() + unit_dir.x() * 0.01,
+                                 origin.y() + unit_dir.y() * 0.01)
+            best = _find_next_boundary(ray_origin, unit_dir, boundaries, hit_entity)
             if best is None:
                 break
             _, best_pt = best
@@ -251,10 +264,31 @@ class ExtendTool(BaseTool):
             hit_entity = new_ent
             origin = best_pt
             steps += 1
-            if not through:
-                break
 
         if steps and self.view:
+            self.view.viewport().update()
+
+    def _do_extend(self, click_pt: QPointF):
+        scene     = self.view.cad_scene
+        entities  = scene.all_entities()
+        boundaries = [ent for ent in self._boundaries if ent in entities]
+        if not boundaries:
+            return
+
+        target = self._find_extend_target(click_pt, entities, boundaries)
+        if target is None:
+            return
+        hit_entity, hit_seg_idx, extend_end, fixed_end, endpoint, direction = target
+        best = _find_next_boundary(endpoint, direction, boundaries, hit_entity)
+        if best is None:
+            return
+        _, best_pt = best
+        new_ent = _rebuild_segment(hit_entity, hit_seg_idx,
+                                   fixed_end, best_pt, extend_end)
+        if new_ent is None:
+            return
+        self.view.undo_stack.push(ReplaceEntityCommand(scene, hit_entity, new_ent))
+        if self.view:
             self.view.viewport().update()
 
     def _find_extend_target(self, click_pt: QPointF, entities: list, boundaries: list):
@@ -406,13 +440,14 @@ def _find_next_boundary(origin: QPointF, direction: QPointF, boundaries: list, o
 def _line_line_intersect(origin: QPointF, direction: QPointF,
                          c: QPointF, d: QPointF) -> QPointF | None:
     """Intersect ray (origin + t*direction) with segment c→d. Returns point or None."""
-    far = QPointF(origin.x() + direction.x() * 1e6,
-                  origin.y() + direction.y() * 1e6)
+    dir_len = math.hypot(direction.x(), direction.y())
+    if dir_len < 1e-9:
+        return None
+    far = QPointF(origin.x() + direction.x() / dir_len * 45000.0,
+                  origin.y() + direction.y() / dir_len * 45000.0)
     itype, pt = QLineF(origin, far).intersects(QLineF(c, d))
     if itype == QLineF.IntersectionType.BoundedIntersection:
         return pt
-    # Also check unbounded (segment c→d might be on the extending side)
-    itype2, pt2 = QLineF(origin, far).intersects(QLineF(c, d))
     return None
 
 

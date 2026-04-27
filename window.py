@@ -300,6 +300,13 @@ class MainWindow(QMainWindow):
         lbl.setFont(QFont("Courier New", 9))
         sb.addWidget(lbl)
 
+        grid = QAction("Grid", self)
+        grid.setCheckable(True)
+        grid.setChecked(self.snap_manager.grid_snap_enabled)
+        grid.setToolTip("GRID snap  [F9]")
+        grid.toggled.connect(self._toggle_grid_snap)
+        sb.addAction(grid)
+
         snap_defs = [
             (SnapMode.ENDPOINT,     "Endpoint",     "ENDpoint  —  yellow square"),
             (SnapMode.MIDPOINT,     "Midpoint",     "MIDpoint  —  yellow triangle"),
@@ -436,3 +443,6 @@ class MainWindow(QMainWindow):
             self.snap_manager.active_modes.add(mode)
         else:
             self.snap_manager.active_modes.discard(mode)
+
+    def _toggle_grid_snap(self, enabled: bool):
+        self.snap_manager.grid_snap_enabled = enabled

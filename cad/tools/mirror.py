@@ -1,9 +1,11 @@
+import math
 from PySide6.QtCore import Qt, QPointF, QPoint, QRect, QRectF
 from PySide6.QtGui import QPen, QColor, QPainter, QBrush
 
 from .base import BaseTool
 from ._ghost import GHOST_PEN, draw_entities_ghost_mirrored
 from ..undo import MirrorEntitiesCommand
+from ..constants import GRID_UNIT
 
 
 PREVIEW_COLOR = QColor("#ffffff")
@@ -34,6 +36,8 @@ class MirrorTool(BaseTool):
         self._press_vp: QPoint | None = None
         self._cur_vp: QPoint | None = None
         self._dragging = False
+        self._angle_locked = False
+        self._locked_angle = 0.0
 
     @property
     def is_idle(self) -> bool:
@@ -46,6 +50,8 @@ class MirrorTool(BaseTool):
         if self._state == STATE_P1:
             return f"MIRROR  {len(self._entities)} object(s)  Specify first mirror-line point:"
         if self._state == STATE_P2:
+            if self._angle_locked:
+                return f"MIRROR  {self._locked_angle:.1f}° 🔒  [Tab=unlock]"
             return "MIRROR  Specify second mirror-line point:"
         return "MIRROR  Keep original? [Y]/N  (Enter = Yes)"
 
@@ -59,12 +65,27 @@ class MirrorTool(BaseTool):
         self._press_vp = None
         self._cur_vp = None
         self._dragging = False
+        self._angle_locked = False
+        self._locked_angle = 0.0
 
     def deactivate(self):
         self.cancel()
         super().deactivate()
 
     def on_command(self, cmd: str) -> bool:
+        if self._state == STATE_P2:
+            stripped = cmd.strip()
+            if stripped.upper().startswith("A"):
+                try:
+                    self._locked_angle = float(stripped[1:])
+                except ValueError:
+                    return False
+                self._angle_locked = True
+                if self.view:
+                    self.view._update_prompt()
+                    self.view.viewport().update()
+                return True
+            return False
         if self._state != STATE_KEEP:
             return False
         cmd = cmd.strip().upper()
@@ -77,6 +98,18 @@ class MirrorTool(BaseTool):
         return False
 
     def on_key(self, event):
+        if event.key() == Qt.Key.Key_Tab and self._state == STATE_P2:
+            if self._angle_locked:
+                self._angle_locked = False
+            elif self._p1 is not None and self._cursor is not None:
+                dx = self._cursor.x() - self._p1.x()
+                dy = self._cursor.y() - self._p1.y()
+                self._locked_angle = math.degrees(math.atan2(-dy, dx)) % 360
+                self._angle_locked = True
+            if self.view:
+                self.view._update_prompt()
+                self.view.viewport().update()
+            return
         if event.key() not in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             return
         if self._state == STATE_SELECT:
@@ -107,9 +140,12 @@ class MirrorTool(BaseTool):
             self._cursor = QPointF(snapped)
             self._state = STATE_P2
         elif self._state == STATE_P2:
-            self._p2 = QPointF(snapped)
-            self._cursor = QPointF(snapped)
+            pt = self._cursor if self._angle_locked and self._cursor is not None else snapped
+            self._p2 = QPointF(pt)
+            self._cursor = QPointF(pt)
             self._state = STATE_KEEP
+            self._angle_locked = False
+            self._locked_angle = 0.0
 
         if self.view:
             self.view.viewport().update()
@@ -123,9 +159,23 @@ class MirrorTool(BaseTool):
             dy = abs(self._cur_vp.y() - self._press_vp.y())
             if not self._dragging and (dx > DRAG_THRESHOLD or dy > DRAG_THRESHOLD):
                 self._dragging = True
+        elif self._state == STATE_P2:
+            if self._angle_locked and self._p1:
+                rad = math.radians(self._locked_angle)
+                dir_x, dir_y = math.cos(rad), -math.sin(rad)
+                dx = snapped.x() - self._p1.x()
+                dy = snapped.y() - self._p1.y()
+                t = dx * dir_x + dy * dir_y
+                if t < 0:
+                    t = 0.1 * GRID_UNIT
+                self._cursor = QPointF(self._p1.x() + dir_x * t,
+                                       self._p1.y() + dir_y * t)
+            else:
+                self._cursor = QPointF(snapped)
         else:
             self._cursor = QPointF(snapped)
         if self.view:
+            self.view._update_prompt()
             self.view.viewport().update()
 
     def on_release(self, snapped: QPointF, event):
@@ -141,6 +191,8 @@ class MirrorTool(BaseTool):
         self._press_vp = None
         self._cur_vp = None
         self._dragging = False
+        self._angle_locked = False
+        self._locked_angle = 0.0
         if self.view:
             self.view.viewport().update()
 
@@ -176,6 +228,15 @@ class MirrorTool(BaseTool):
         pen.setCosmetic(True)
         painter.setPen(pen)
         painter.drawLine(p1, p2)
+        if self._state == STATE_P2 and self._cursor is not None:
+            dx = self._cursor.x() - self._p1.x()
+            dy = self._cursor.y() - self._p1.y()
+            angle = math.degrees(math.atan2(-dy, dx)) % 180
+            mid = v.mapFromScene(QPointF((self._p1.x() + self._cursor.x()) / 2,
+                                         (self._p1.y() + self._cursor.y()) / 2))
+            painter.setPen(QPen(PREVIEW_COLOR, 1))
+            lock = " 🔒" if self._angle_locked else ""
+            painter.drawText(mid.x() + 6, mid.y() - 6, f"Axis: {angle:.1f}°{lock}")
 
         painter.setPen(GHOST_PEN)
         draw_entities_ghost_mirrored(
@@ -192,6 +253,8 @@ class MirrorTool(BaseTool):
             self._press_vp = None
             self._cur_vp = None
             self._dragging = False
+            self._angle_locked = False
+            self._locked_angle = 0.0
             if self.view:
                 self.view.viewport().update()
 
@@ -252,6 +315,8 @@ class MirrorTool(BaseTool):
         self._press_vp = None
         self._cur_vp = None
         self._dragging = False
+        self._angle_locked = False
+        self._locked_angle = 0.0
         if self.view:
             self.view.viewport().update()
 

@@ -6,6 +6,7 @@ GRIP_PX   = 8    # grip square size in viewport pixels
 
 
 class SnapMode(Enum):
+    NONE         = auto()
     GRID         = auto()
     ENDPOINT     = auto()
     MIDPOINT     = auto()

@@ -31,6 +31,14 @@ def _direction_pt(anchor: QPointF, cursor: QPointF, dist_units: float) -> QPoint
     return QPointF(anchor.x() + dx * scene_dist, anchor.y() + dy * scene_dist)
 
 
+def _angle_pt(anchor: QPointF, angle: float, dist_units: float) -> QPointF:
+    rad = math.radians(angle)
+    dx = math.cos(rad)
+    dy = -math.sin(rad)
+    scene_dist = dist_units * GRID_UNIT
+    return QPointF(anchor.x() + dx * scene_dist, anchor.y() + dy * scene_dist)
+
+
 class MoveTool(BaseTool):
     """Select entities first, then M: pick base point → pick destination."""
 
@@ -45,6 +53,8 @@ class MoveTool(BaseTool):
         self._press_vp: QPoint | None = None
         self._cur_vp: QPoint | None = None
         self._dragging = False
+        self._angle_locked = False
+        self._locked_angle = 0.0
 
     @property
     def is_idle(self) -> bool:
@@ -56,7 +66,9 @@ class MoveTool(BaseTool):
             return f"MOVE  Select objects ({len(self._entities)}) [Space/Enter = confirm, Esc = cancel]"
         if self._state == STATE_BASE:
             return f"MOVE  {len(self._entities)} object(s)  Specify base point:"
-        return "MOVE  Specify destination  [type distance + Enter, or click]"
+        if self._angle_locked:
+            return f"MOVE  {self._locked_angle:.1f}° 🔒  [type dist, Tab=unlock]"
+        return "MOVE  Specify destination  [type dist, A<deg>=lock angle]"
 
     def activate(self, view):
         super().activate(view)
@@ -69,6 +81,8 @@ class MoveTool(BaseTool):
         self._press_vp = None
         self._cur_vp = None
         self._dragging = False
+        self._angle_locked = False
+        self._locked_angle = 0.0
 
     def deactivate(self):
         self._entities = []
@@ -78,9 +92,23 @@ class MoveTool(BaseTool):
         self._press_vp = None
         self._cur_vp = None
         self._dragging = False
+        self._angle_locked = False
+        self._locked_angle = 0.0
         super().deactivate()
 
     def on_key(self, event):
+        if event.key() == Qt.Key.Key_Tab and self._state == STATE_DEST:
+            if self._angle_locked:
+                self._angle_locked = False
+            elif self._base is not None and self._cursor is not None:
+                dx = self._cursor.x() - self._base.x()
+                dy = self._cursor.y() - self._base.y()
+                self._locked_angle = math.degrees(math.atan2(-dy, dx)) % 360
+                self._angle_locked = True
+            if self.view:
+                self.view._update_prompt()
+                self.view.viewport().update()
+            return
         if event.key() not in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             return
         if self._state == STATE_SELECT and self._entities:
@@ -95,11 +123,25 @@ class MoveTool(BaseTool):
     def on_command(self, cmd: str) -> bool:
         if self._state != STATE_DEST or self._base is None or self._cursor is None:
             return False
+        stripped = cmd.strip()
+        if stripped.upper().startswith("A"):
+            try:
+                self._locked_angle = float(stripped[1:])
+            except ValueError:
+                return False
+            self._angle_locked = True
+            if self.view:
+                self.view._update_prompt()
+                self.view.viewport().update()
+            return True
         try:
-            dist = float(cmd)
+            dist = float(stripped)
         except ValueError:
             return False
-        dest = _direction_pt(self._base, self._cursor, dist)
+        if self._angle_locked:
+            dest = _angle_pt(self._base, self._locked_angle, dist)
+        else:
+            dest = _direction_pt(self._base, self._cursor, dist)
         self._commit(dest)
         return True
 
@@ -117,7 +159,8 @@ class MoveTool(BaseTool):
             self._cursor = QPointF(snapped)
             self._state = STATE_DEST
         elif self._state == STATE_DEST:
-            self._commit(snapped)
+            dest = self._cursor if self._angle_locked and self._cursor is not None else snapped
+            self._commit(dest)
 
     def on_move(self, snapped: QPointF, raw: QPointF, event):
         if self._state == STATE_SELECT:
@@ -129,8 +172,20 @@ class MoveTool(BaseTool):
             if not self._dragging and (dx > DRAG_THRESHOLD or dy > DRAG_THRESHOLD):
                 self._dragging = True
         else:
-            self._cursor = QPointF(snapped)
+            if self._angle_locked and self._base:
+                rad = math.radians(self._locked_angle)
+                dir_x, dir_y = math.cos(rad), -math.sin(rad)
+                dx = snapped.x() - self._base.x()
+                dy = snapped.y() - self._base.y()
+                t = dx * dir_x + dy * dir_y
+                if t < 0:
+                    t = 0
+                self._cursor = QPointF(self._base.x() + dir_x * t,
+                                       self._base.y() + dir_y * t)
+            else:
+                self._cursor = QPointF(snapped)
         if self.view:
+            self.view._update_prompt()
             self.view.viewport().update()
 
     def on_release(self, snapped: QPointF, event):
@@ -146,6 +201,8 @@ class MoveTool(BaseTool):
         self._press_vp = None
         self._cur_vp = None
         self._dragging = False
+        self._angle_locked = False
+        self._locked_angle = 0.0
         if self.view:
             self.view.viewport().update()
 
@@ -176,9 +233,11 @@ class MoveTool(BaseTool):
         dx = self._cursor.x() - self._base.x()
         dy = self._cursor.y() - self._base.y()
         dist_units = math.hypot(dx, dy) / GRID_UNIT
+        angle = math.degrees(math.atan2(-dy, dx)) % 360
         cp = v.mapFromScene(self._cursor)
         painter.setPen(QPen(QColor('#ffffff'), 1))
-        painter.drawText(cp.x() + 8, cp.y() - 8, f'{dist_units:.2f}')
+        lock = " 🔒" if self._angle_locked else ""
+        painter.drawText(cp.x() + 8, cp.y() - 8, f'{dist_units:.2f}u  {angle:.1f}°{lock}')
         painter.setPen(GHOST_PEN)
         draw_entities_ghost_translated(painter, v, self._entities, dx, dy)
 
@@ -202,6 +261,8 @@ class MoveTool(BaseTool):
             self._press_vp = None
             self._cur_vp = None
             self._dragging = False
+            self._angle_locked = False
+            self._locked_angle = 0.0
             if self.view:
                 self.view.viewport().update()
 
@@ -246,6 +307,8 @@ class MoveTool(BaseTool):
         self._press_vp = None
         self._cur_vp = None
         self._dragging = False
+        self._angle_locked = False
+        self._locked_angle = 0.0
         if self.view:
             self.view.viewport().update()
 

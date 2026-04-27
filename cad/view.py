@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QGraphicsView
 from PySide6.QtGui import (
-    QPainter, QPen, QColor, QKeySequence,
+    QPainter, QPen, QColor, QKeySequence, QFont,
     QMouseEvent, QKeyEvent, QWheelEvent, QPolygon
 )
 from PySide6.QtCore import Qt, QPointF, QRectF, QPoint
@@ -15,6 +15,7 @@ from .tools.base import BaseTool
 GRID_MINOR = GRID_UNIT        # 10 scene px = 1 unit
 GRID_MAJOR = GRID_UNIT * 10   # 100 scene px = 10 units
 SNAP_MARK  = 11               # snap marker size, viewport px
+APP_VERSION = "v0.2.0"
 
 
 class CADView(QGraphicsView):
@@ -32,6 +33,8 @@ class CADView(QGraphicsView):
         self._select_tool:  BaseTool | None = None   # set by window after init
         self._command_bar   = None                   # set by window after init
         self._snap_result:  SnapResult | None = None
+        self._hovered_entity = None
+        self._show_select_indicator = False
         self._pan_origin:   QPoint | None = None
         self._clipboard:    list = []                # in-memory entity clipboard
 
@@ -115,8 +118,15 @@ class CADView(QGraphicsView):
         if self.current_tool:
             self.current_tool.draw_overlay(painter)
 
+        self._draw_hover_feedback(painter)
+
         if self._snap_result and self._snap_result.mode != SnapMode.GRID:
             self._draw_snap_marker(painter, self._snap_result)
+
+        painter.setPen(QPen(QColor("#555555"), 1))
+        painter.setFont(QFont("Arial", 9))
+        rect = self.viewport().rect()
+        painter.drawText(rect.right() - 70, rect.bottom() - 8, APP_VERSION)
 
         painter.end()
 
@@ -144,6 +154,38 @@ class CADView(QGraphicsView):
             # X shape
             painter.drawLine(vp.x() - h, vp.y() - h, vp.x() + h, vp.y() + h)
             painter.drawLine(vp.x() + h, vp.y() - h, vp.x() - h, vp.y() + h)
+
+    def _draw_hover_feedback(self, painter: QPainter):
+        if self._hovered_entity is None:
+            return
+        tool_has_hover = (
+            hasattr(self.current_tool, "_hovered_entity") and
+            self.current_tool._hovered_entity is not None
+        )
+        if not tool_has_hover:
+            pen = QPen(QColor('#00ffff'), 2)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            scale = self.transform().m11()
+            for seg in self._hovered_entity.line_segments():
+                p1 = self.mapFromScene(seg.p1())
+                p2 = self.mapFromScene(seg.p2())
+                painter.drawLine(p1, p2)
+            from .entities import CircleEntity, ArcEntity
+            ent = self._hovered_entity
+            if isinstance(ent, CircleEntity):
+                c = self.mapFromScene(ent.center)
+                r = ent.radius * scale
+                painter.drawEllipse(c, r, r)
+            elif isinstance(ent, ArcEntity):
+                c = self.mapFromScene(ent.center)
+                r = ent.radius * scale
+                rect = QRectF(c.x() - r, c.y() - r, r * 2, r * 2)
+                painter.drawArc(rect, int(ent.start_angle * 16), int(ent.span_angle * 16))
+        if (not tool_has_hover and self._show_select_indicator
+                and self._snap_result):
+            vp = self.mapFromScene(self._snap_result.point)
+            painter.fillRect(vp.x() + 8, vp.y() - 13, 5, 5, QColor('#ffffff'))
 
     # ── Mouse events ─────────────────────────────────────────────────────────
 
@@ -187,6 +229,13 @@ class CADView(QGraphicsView):
         self._snap_result = self.snap_manager.snap(
             raw, self.cad_scene.all_entities(), self.transform().m11(), extras
         )
+        threshold = 6.0 / self.transform().m11()
+        self._hovered_entity = None
+        for ent in self.cad_scene.all_entities():
+            if ent.hit_test(self._snap_result.point, threshold):
+                self._hovered_entity = ent
+                break
+        self._show_select_indicator = self._hovered_entity is not None
 
         pt = self._snap_result.point
         ux = pt.x() / GRID_UNIT
@@ -197,10 +246,14 @@ class CADView(QGraphicsView):
 
         if self.current_tool:
             self.current_tool.on_move(self._snap_result.point, raw, event)
-            if getattr(self.current_tool, "_hovered_entity", None) is not None:
-                self.setCursor(Qt.CursorShape.PointingHandCursor)
-            else:
-                self.setCursor(Qt.CursorShape.CrossCursor)
+        tool_has_hover = (
+            hasattr(self.current_tool, "_hovered_entity") and
+            self.current_tool._hovered_entity is not None
+        )
+        if self._hovered_entity is not None and not tool_has_hover:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.setCursor(Qt.CursorShape.CrossCursor)
 
         self.viewport().update()
         super().mouseMoveEvent(event)
@@ -301,6 +354,11 @@ class CADView(QGraphicsView):
 
         elif key == Qt.Key.Key_Delete:
             self._delete_selected()
+
+        elif key == Qt.Key.Key_F9:
+            self.snap_manager.grid_snap_enabled = not self.snap_manager.grid_snap_enabled
+            state = "ON" if self.snap_manager.grid_snap_enabled else "OFF"
+            self.status_bar.showMessage(f"Grid snap {state}", 2000)
 
         elif event.matches(QKeySequence.StandardKey.Undo):
             self.undo_stack.undo()
