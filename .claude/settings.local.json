@@ -12,7 +12,8 @@
       "Bash(gh auth *)",
       "Bash(git add *)",
       "Bash(git rm *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(python3 -c \"import cad.tools.trim, cad.tools.extend, cad.view; print\\('OK'\\)\")"
     ]
   }
 }

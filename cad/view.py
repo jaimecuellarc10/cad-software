@@ -158,32 +158,26 @@ class CADView(QGraphicsView):
     def _draw_hover_feedback(self, painter: QPainter):
         if self._hovered_entity is None:
             return
-        tool_has_hover = (
-            hasattr(self.current_tool, "_hovered_entity") and
-            self.current_tool._hovered_entity is not None
-        )
-        if not tool_has_hover:
-            pen = QPen(QColor('#00ffff'), 2)
-            pen.setCosmetic(True)
-            painter.setPen(pen)
-            scale = self.transform().m11()
-            for seg in self._hovered_entity.line_segments():
-                p1 = self.mapFromScene(seg.p1())
-                p2 = self.mapFromScene(seg.p2())
-                painter.drawLine(p1, p2)
-            from .entities import CircleEntity, ArcEntity
-            ent = self._hovered_entity
-            if isinstance(ent, CircleEntity):
-                c = self.mapFromScene(ent.center)
-                r = ent.radius * scale
-                painter.drawEllipse(c, r, r)
-            elif isinstance(ent, ArcEntity):
-                c = self.mapFromScene(ent.center)
-                r = ent.radius * scale
-                rect = QRectF(c.x() - r, c.y() - r, r * 2, r * 2)
-                painter.drawArc(rect, int(ent.start_angle * 16), int(ent.span_angle * 16))
-        if (not tool_has_hover and self._show_select_indicator
-                and self._snap_result):
+        pen = QPen(QColor('#00ffff'), 2)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        scale = self.transform().m11()
+        for seg in self._hovered_entity.line_segments():
+            p1 = self.mapFromScene(seg.p1())
+            p2 = self.mapFromScene(seg.p2())
+            painter.drawLine(p1, p2)
+        from .entities import CircleEntity, ArcEntity
+        ent = self._hovered_entity
+        if isinstance(ent, CircleEntity):
+            c = self.mapFromScene(ent.center)
+            r = ent.radius * scale
+            painter.drawEllipse(c, r, r)
+        elif isinstance(ent, ArcEntity):
+            c = self.mapFromScene(ent.center)
+            r = ent.radius * scale
+            rect = QRectF(c.x() - r, c.y() - r, r * 2, r * 2)
+            painter.drawArc(rect, int(ent.start_angle * 16), int(ent.span_angle * 16))
+        if self._show_select_indicator and self._snap_result:
             vp = self.mapFromScene(self._snap_result.point)
             painter.fillRect(vp.x() + 8, vp.y() - 13, 5, 5, QColor('#ffffff'))
 
@@ -246,14 +240,7 @@ class CADView(QGraphicsView):
 
         if self.current_tool:
             self.current_tool.on_move(self._snap_result.point, raw, event)
-        tool_has_hover = (
-            hasattr(self.current_tool, "_hovered_entity") and
-            self.current_tool._hovered_entity is not None
-        )
-        if self._hovered_entity is not None and not tool_has_hover:
-            self.setCursor(Qt.CursorShape.PointingHandCursor)
-        else:
-            self.setCursor(Qt.CursorShape.CrossCursor)
+        pass
 
         self.viewport().update()
         super().mouseMoveEvent(event)

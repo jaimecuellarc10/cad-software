@@ -29,8 +29,7 @@ class TrimTool(BaseTool):
         self._press_vp: QPoint | None = None
         self._cur_vp: QPoint | None = None
         self._dragging = False
-        self._hovered_entity = None
-        self._hover_scene_pt: QPointF | None = None
+        self._last_click_pt: QPointF | None = None
 
     @property
     def is_idle(self) -> bool:
@@ -50,8 +49,7 @@ class TrimTool(BaseTool):
         self._press_vp = None
         self._cur_vp = None
         self._dragging = False
-        self._hovered_entity = None
-        self._hover_scene_pt = None
+        self._last_click_pt = None
 
     def deactivate(self):
         self._clear_cut_edges()
@@ -59,8 +57,7 @@ class TrimTool(BaseTool):
         self._press_vp = None
         self._cur_vp = None
         self._dragging = False
-        self._hovered_entity = None
-        self._hover_scene_pt = None
+        self._last_click_pt = None
         super().deactivate()
 
     def on_key(self, event):
@@ -75,8 +72,6 @@ class TrimTool(BaseTool):
             self._press_vp = None
             self._cur_vp = None
             self._dragging = False
-            self._hovered_entity = None
-            self._hover_scene_pt = None
             if self.view:
                 self.view.viewport().update()
         else:
@@ -92,8 +87,6 @@ class TrimTool(BaseTool):
             self._press_vp = None
             self._cur_vp = None
             self._dragging = False
-            self._hovered_entity = None
-            self._hover_scene_pt = None
             if self.view:
                 self.view.viewport().update()
         else:
@@ -107,17 +100,7 @@ class TrimTool(BaseTool):
         self._dragging = False
 
     def on_move(self, snapped: QPointF, raw: QPointF, event):
-        if self._state == STATE_TRIM:
-            threshold = 6.0 / self.view.transform().m11()
-            self._hovered_entity = None
-            for ent in self.view.cad_scene.all_entities():
-                if ent.hit_test(raw, threshold):
-                    self._hovered_entity = ent
-                    break
-            self._hover_scene_pt = QPointF(raw) if self._hovered_entity is not None else None
-        else:
-            self._hovered_entity = None
-            self._hover_scene_pt = None
+        self._last_click_pt = QPointF(raw)
         if self._press_vp is None:
             if self.view:
                 self.view.viewport().update()
@@ -158,8 +141,7 @@ class TrimTool(BaseTool):
         self._press_vp = None
         self._cur_vp = None
         self._dragging = False
-        self._hovered_entity = None
-        self._hover_scene_pt = None
+        self._last_click_pt = None
         if self.view:
             self.view.viewport().update()
 
@@ -171,9 +153,9 @@ class TrimTool(BaseTool):
             view._notify_tool_change("select")
 
     def draw_overlay(self, painter: QPainter):
-        if self._hovered_entity is not None and self._state == STATE_TRIM:
-            _draw_entity(painter, self.view, self._hovered_entity, QColor("#00ffff"), 2)
-            removed = _trim_removed_segments(self._hovered_entity, self._hover_scene_pt,
+        hovered = getattr(self.view, '_hovered_entity', None) if self.view else None
+        if hovered is not None and self._state == STATE_TRIM:
+            removed = _trim_removed_segments(hovered, self._last_click_pt,
                                              [ent for ent in self._cut_edges
                                               if ent in self.view.cad_scene.all_entities()])
             if removed:
