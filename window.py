@@ -217,6 +217,7 @@ class MainWindow(QMainWindow):
         self._last_draw_tool: str | None = None
 
         self.view._select_tool     = self._select_tool
+        self.view._text_tool       = self._text_tool
         self.view._on_tool_change  = self._sync_tool_buttons
         self.view._on_space_recall = self._recall_last_tool
 

@@ -1,7 +1,7 @@
 from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import QColor, QPen
 
-from ..entities import LineEntity, PolylineEntity, CircleEntity, ArcEntity, EllipseEntity, _mirror_pt
+from ..entities import LineEntity, PolylineEntity, CircleEntity, ArcEntity, EllipseEntity, TextEntity, _mirror_pt, _scale_pt
 
 
 GHOST_PEN = QPen(QColor(255, 255, 255, 110), 1, Qt.PenStyle.DashLine)
@@ -30,6 +30,13 @@ def draw_entities_ghost_translated(painter, view, entities, dx, dy):
             r = entity.radius * scale
             rect = QRectF(c.x() - r, c.y() - r, r * 2, r * 2)
             painter.drawArc(rect, int(entity.start_angle * 16), int(entity.span_angle * 16))
+        elif isinstance(entity, TextEntity):
+            corners = entity._world_corners()
+            translated = [QPointF(p.x()+dx, p.y()+dy) for p in corners]
+            for i in range(len(translated)):
+                a = _vp(view, translated[i])
+                b = _vp(view, translated[(i+1) % len(translated)])
+                painter.drawLine(a, b)
 
 
 def draw_entities_ghost_mirrored(painter, view, entities, ax, ay, bx, by):
@@ -56,6 +63,11 @@ def draw_entities_ghost_mirrored(painter, view, entities, ax, ay, bx, by):
             r = ghost.radius * scale
             rect = QRectF(c.x() - r, c.y() - r, r * 2, r * 2)
             painter.drawArc(rect, int(ghost.start_angle * 16), int(ghost.span_angle * 16))
+        elif isinstance(entity, TextEntity):
+            corners = entity._world_corners()
+            mirrored = [_mirror_pt(p, ax, ay, bx, by) for p in corners]
+            for i in range(len(mirrored)):
+                painter.drawLine(_vp(view, mirrored[i]), _vp(view, mirrored[(i+1) % len(mirrored)]))
 
 
 def draw_entities_ghost_scaled(painter, view, entities, cx, cy, factor):
@@ -84,6 +96,11 @@ def draw_entities_ghost_scaled(painter, view, entities, cx, cy, factor):
             r = ghost.radius * scale
             rect = QRectF(c.x()-r, c.y()-r, r*2, r*2)
             painter.drawArc(rect, int(ghost.start_angle*16), int(ghost.span_angle*16))
+        elif isinstance(entity, TextEntity):
+            corners = entity._world_corners()
+            scaled_corners = [_scale_pt(p, cx, cy, factor) for p in corners]
+            for i in range(len(scaled_corners)):
+                painter.drawLine(_vp(view, scaled_corners[i]), _vp(view, scaled_corners[(i+1) % len(scaled_corners)]))
 
 
 def draw_entities_ghost_rotated(painter, view, entities, cx, cy, angle_deg):
@@ -119,6 +136,11 @@ def draw_entities_ghost_rotated(painter, view, entities, cx, cy, angle_deg):
             r = ghost.radius * scale
             rect = QRectF(c.x() - r, c.y() - r, r * 2, r * 2)
             painter.drawArc(rect, int(ghost.start_angle * 16), int(ghost.span_angle * 16))
+        elif isinstance(entity, TextEntity):
+            corners = entity._world_corners()
+            rotated = [rot(p) for p in corners]
+            for i in range(len(rotated)):
+                painter.drawLine(_vp(view, rotated[i]), _vp(view, rotated[(i+1) % len(rotated)]))
 
 
 def _translate_pt(pt: QPointF, dx: float, dy: float) -> QPointF:

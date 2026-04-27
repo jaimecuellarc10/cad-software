@@ -15,7 +15,9 @@ class TextTool(BaseTool):
         super().__init__()
         self._state = STATE_POS
         self._pos: QPointF | None = None
+        self._height = 2.5
         self._buffer = ""
+        self._editing_entity = None
 
     @property
     def is_idle(self):
@@ -24,20 +26,35 @@ class TextTool(BaseTool):
     @property
     def prompt(self):
         if self._state == STATE_POS:
-            return "TEXT  Click insertion point"
-        return "TEXT  Type text content, Enter to place"
+            return f"TEXT  h={self._height:.1f}  Click point  [H<val>=height]"
+        if self._editing_entity is not None:
+            return f"TEXT  Editing  h={self._height:.1f}  [Enter=save, Esc=cancel]"
+        return f"TEXT  h={self._height:.1f}  Type text, Enter to place"
 
     def activate(self, view):
         super().activate(view)
         self._state = STATE_POS
         self._pos = None
+        self._height = 2.5
         self._buffer = ""
+        self._editing_entity = None
 
     def deactivate(self):
         self._state = STATE_POS
         self._pos = None
+        self._height = 2.5
         self._buffer = ""
+        self._editing_entity = None
         super().deactivate()
+
+    def begin_edit(self, ent: TextEntity):
+        self._editing_entity = ent
+        self._pos = QPointF(ent.pos)
+        self._height = ent.height
+        self._buffer = ent.text
+        self._state = STATE_INPUT
+        if self.view:
+            self.view.viewport().update()
 
     def on_press(self, snapped: QPointF, event):
         if event.button() != Qt.MouseButton.LeftButton:
@@ -67,6 +84,27 @@ class TextTool(BaseTool):
             self.view.viewport().update()
 
     def on_command(self, cmd: str) -> bool:
+        stripped = cmd.strip()
+        if stripped.upper().startswith("H"):
+            try:
+                self._height = float(stripped[1:])
+            except ValueError:
+                pass
+            else:
+                if self.view:
+                    self.view._update_prompt()
+                    self.view.viewport().update()
+                return True
+        if self._state == STATE_POS:
+            try:
+                self._height = float(stripped)
+            except ValueError:
+                pass
+            else:
+                if self.view:
+                    self.view._update_prompt()
+                    self.view.viewport().update()
+                return True
         coord = self._parse_coord(cmd)
         if coord is not None and self._state == STATE_POS:
             self._pos = coord
@@ -97,7 +135,9 @@ class TextTool(BaseTool):
     def cancel(self):
         self._state = STATE_POS
         self._pos = None
+        self._height = 2.5
         self._buffer = ""
+        self._editing_entity = None
         if self.view:
             self.view.viewport().update()
 
@@ -105,8 +145,16 @@ class TextTool(BaseTool):
         if self._pos is None or not text:
             return
         layer = self.view.layer_manager.current
-        ent = TextEntity(self._pos, text, height=2.5, layer=layer)
-        self.view.undo_stack.push(AddEntityCommand(self.view.cad_scene, ent))
+        new_ent = TextEntity(self._pos, text, height=self._height,
+                             angle_deg=self._editing_entity.angle_deg if self._editing_entity else 0.0,
+                             layer=layer)
+        if self._editing_entity is not None:
+            from ..undo import ReplaceEntityCommand
+            self.view.undo_stack.push(
+                ReplaceEntityCommand(self.view.cad_scene, self._editing_entity, new_ent))
+            self._editing_entity = None
+        else:
+            self.view.undo_stack.push(AddEntityCommand(self.view.cad_scene, new_ent))
         self._state = STATE_POS
         self._pos = None
         self._buffer = ""

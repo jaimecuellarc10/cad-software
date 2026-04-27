@@ -166,7 +166,7 @@ class CADView(QGraphicsView):
             p1 = self.mapFromScene(seg.p1())
             p2 = self.mapFromScene(seg.p2())
             painter.drawLine(p1, p2)
-        from .entities import CircleEntity, ArcEntity
+        from .entities import CircleEntity, ArcEntity, TextEntity
         ent = self._hovered_entity
         if isinstance(ent, CircleEntity):
             c = self.mapFromScene(ent.center)
@@ -177,6 +177,12 @@ class CADView(QGraphicsView):
             r = ent.radius * scale
             rect = QRectF(c.x() - r, c.y() - r, r * 2, r * 2)
             painter.drawArc(rect, int(ent.start_angle * 16), int(ent.span_angle * 16))
+        elif isinstance(ent, TextEntity):
+            corners = ent._world_corners()
+            for i in range(len(corners)):
+                a = self.mapFromScene(corners[i])
+                b = self.mapFromScene(corners[(i+1) % len(corners)])
+                painter.drawLine(a, b)
         if self._show_select_indicator and self._snap_result:
             vp = self.mapFromScene(self._snap_result.point)
             painter.fillRect(vp.x() + 8, vp.y() - 13, 5, 5, QColor('#ffffff'))
@@ -198,6 +204,16 @@ class CADView(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
+        from .entities import TextEntity
+        if isinstance(self._hovered_entity, TextEntity):
+            text_ent = self._hovered_entity
+            if hasattr(self, '_text_tool') and self._text_tool is not None:
+                self.set_tool(self._text_tool)
+                self._text_tool.begin_edit(text_ent)
+                self._update_prompt()
+                self.viewport().update()
+                return
+
         if self.current_tool:
             raw     = self.mapToScene(event.position().toPoint())
             snapped = self._snap_result.point if self._snap_result else raw
