@@ -366,11 +366,13 @@ class PolylineEntity(CADEntity):
 
 class CircleEntity(CADEntity):
     def __init__(self, center: QPointF, radius: float, layer: Layer,
-                 lineweight: float | None = None):
+                 lineweight: float | None = None,
+                 linetype: Qt.PenStyle = Qt.PenStyle.SolidLine):
         super().__init__(layer)
         self._center    = QPointF(center)
         self._radius    = float(radius)
         self.lineweight = lineweight
+        self.linetype   = linetype
 
     @property
     def center(self) -> QPointF: return QPointF(self._center)
@@ -392,7 +394,7 @@ class CircleEntity(CADEntity):
 
     def paint(self, painter: QPainter, option, widget=None):
         lw  = self.lineweight if self.lineweight is not None else self.layer.lineweight
-        pen = QPen(self.draw_color, lw)
+        pen = QPen(self.draw_color, lw, self.linetype)
         pen.setCosmetic(True)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -437,7 +439,7 @@ class CircleEntity(CADEntity):
         self.update()
 
     def clone(self) -> "CircleEntity":
-        return CircleEntity(self._center, self._radius, self.layer, self.lineweight)
+        return CircleEntity(self._center, self._radius, self.layer, self.lineweight, self.linetype)
 
 
 # ── Arc ───────────────────────────────────────────────────────────────────────
@@ -451,13 +453,15 @@ class ArcEntity(CADEntity):
 
     def __init__(self, center: QPointF, radius: float,
                  start_angle: float, span_angle: float, layer: Layer,
-                 lineweight: float | None = None):
+                 lineweight: float | None = None,
+                 linetype: Qt.PenStyle = Qt.PenStyle.SolidLine):
         super().__init__(layer)
         self._center      = QPointF(center)
         self._radius      = float(radius)
         self._start_angle = float(start_angle)   # degrees
         self._span_angle  = float(span_angle)    # degrees, CCW positive
         self.lineweight   = lineweight
+        self.linetype     = linetype
 
     @property
     def center(self) -> QPointF: return QPointF(self._center)
@@ -489,7 +493,7 @@ class ArcEntity(CADEntity):
 
     def paint(self, painter: QPainter, option, widget=None):
         lw  = self.lineweight if self.lineweight is not None else self.layer.lineweight
-        pen = QPen(self.draw_color, lw)
+        pen = QPen(self.draw_color, lw, self.linetype)
         pen.setCosmetic(True)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -558,19 +562,21 @@ class ArcEntity(CADEntity):
 
     def clone(self) -> "ArcEntity":
         return ArcEntity(self._center, self._radius, self._start_angle,
-                         self._span_angle, self.layer, self.lineweight)
+                         self._span_angle, self.layer, self.lineweight, self.linetype)
 
 
 class EllipseEntity(CADEntity):
     """Ellipse defined by center, semi-axes rx/ry, and rotation angle (CCW on screen)."""
     def __init__(self, center: QPointF, rx: float, ry: float,
-                 angle_deg: float, layer: "Layer", lineweight: float | None = None):
+                 angle_deg: float, layer: "Layer", lineweight: float | None = None,
+                 linetype: Qt.PenStyle = Qt.PenStyle.SolidLine):
         super().__init__(layer)
         self._center    = QPointF(center)
         self._rx        = float(rx)
         self._ry        = float(ry)
         self._angle_deg = float(angle_deg)
         self.lineweight = lineweight
+        self.linetype   = linetype
 
     @property
     def center(self) -> QPointF: return QPointF(self._center)
@@ -605,7 +611,7 @@ class EllipseEntity(CADEntity):
 
     def paint(self, painter: QPainter, option, widget=None):
         lw  = self.lineweight if self.lineweight is not None else self.layer.lineweight
-        pen = QPen(self.draw_color, lw)
+        pen = QPen(self.draw_color, lw, self.linetype)
         pen.setCosmetic(True)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -666,7 +672,7 @@ class EllipseEntity(CADEntity):
 
     def clone(self) -> "EllipseEntity":
         return EllipseEntity(self._center, self._rx, self._ry,
-                             self._angle_deg, self.layer, self.lineweight)
+                             self._angle_deg, self.layer, self.lineweight, self.linetype)
 
 
 class XLineEntity(CADEntity):
@@ -864,12 +870,15 @@ class TextEntity(CADEntity):
 
 class DimLinearEntity(CADEntity):
     def __init__(self, p1: QPointF, p2: QPointF, offset: float,
-                 text_override: str = "", layer: "Layer" | None = None):
+                 text_override: str = "", layer: "Layer" | None = None,
+                 arrow_size: float = 8.0, text_height: float = 2.5):
         super().__init__(layer or Layer("0"))
         self._p1 = QPointF(p1)
         self._p2 = QPointF(p2)
         self._offset = float(offset)
         self._text_override = text_override
+        self.arrow_size = float(arrow_size)
+        self.text_height = float(text_height)
 
     @property
     def p1(self) -> QPointF: return QPointF(self._p1)
@@ -899,7 +908,7 @@ class DimLinearEntity(CADEntity):
 
     def paint(self, painter: QPainter, option, widget=None):
         q1, q2, ux, uy, nx, ny, length = self._geometry()
-        color = QColor(255, 165, 0) if self._selected else QColor("#ffffff")
+        color = QColor(255, 165, 0) if self._selected else (self.color_override or QColor("#ffffff"))
         painter.setPen(QPen(color, 0))
         painter.setBrush(color)
         painter.drawLine(self._p1, q1)
@@ -909,12 +918,15 @@ class DimLinearEntity(CADEntity):
         self._draw_arrow(painter, q2, -ux, -uy)
         mid = QPointF((q1.x()+q2.x())/2, (q1.y()+q2.y())/2)
         text = self._text_override or f"{length/GRID_UNIT:.3f}"
-        painter.drawText(mid.x()+6, mid.y()-6, text)
+        th_px = max(1, int(self.text_height * GRID_UNIT))
+        painter.setFont(QFont("Arial", th_px))
+        off = th_px * 0.4
+        painter.drawText(mid.x() + off, mid.y() - off, text)
         if self._selected:
             self._paint_grips(painter)
 
     def _draw_arrow(self, painter: QPainter, tip: QPointF, ux: float, uy: float):
-        size = 8.0
+        size = self.arrow_size
         nx, ny = -uy, ux
         back = QPointF(tip.x()+ux*size, tip.y()+uy*size)
         pts = QPolygonF([
@@ -981,17 +993,21 @@ class DimLinearEntity(CADEntity):
 
     def clone(self) -> "DimLinearEntity":
         return DimLinearEntity(self._p1, self._p2, self._offset,
-                               self._text_override, self.layer)
+                               self._text_override, self.layer,
+                               self.arrow_size, self.text_height)
 
 
 class DimAngularEntity(CADEntity):
     def __init__(self, center: QPointF, p1: QPointF, p2: QPointF,
-                 radius: float, layer: "Layer" | None = None):
+                 radius: float, layer: "Layer" | None = None,
+                 arrow_size: float = 8.0, text_height: float = 2.5):
         super().__init__(layer or Layer("0"))
         self._center = QPointF(center)
         self._p1 = QPointF(p1)
         self._p2 = QPointF(p2)
         self._radius = float(radius)
+        self.arrow_size = float(arrow_size)
+        self.text_height = float(text_height)
 
     def _angles(self):
         a1 = math.degrees(math.atan2(-(self._p1.y()-self._center.y()),
@@ -1013,7 +1029,7 @@ class DimAngularEntity(CADEntity):
         return QRectF(self._center.x()-r, self._center.y()-r, r*2, r*2)
 
     def paint(self, painter: QPainter, option, widget=None):
-        color = QColor(255, 165, 0) if self._selected else QColor("#ffffff")
+        color = QColor(255, 165, 0) if self._selected else (self.color_override or QColor("#ffffff"))
         painter.setPen(QPen(color, 0))
         painter.setBrush(color)
         a1, span = self._angles()
@@ -1029,7 +1045,10 @@ class DimAngularEntity(CADEntity):
         self._draw_tangent_arrow(painter, e2, a1 + span, sign)
         mid_ang = a1 + span/2
         text_pt = self._point_at(mid_ang)
-        painter.drawText(text_pt.x()+6, text_pt.y()-6, f"{abs(span):.1f}°")
+        th_px = max(1, int(self.text_height * GRID_UNIT))
+        painter.setFont(QFont("Arial", th_px))
+        off = th_px * 0.4
+        painter.drawText(text_pt.x() + off, text_pt.y() - off, f"{abs(span):.1f}°")
         if self._selected:
             self._paint_grips(painter)
 
@@ -1038,7 +1057,7 @@ class DimAngularEntity(CADEntity):
         tx = -math.sin(rad) * sign
         ty = -math.cos(rad) * sign
         nx, ny = -ty, tx
-        size = 8.0
+        size = self.arrow_size
         back = QPointF(tip.x()-tx*size, tip.y()-ty*size)
         painter.drawPolygon(QPolygonF([
             tip,
@@ -1098,7 +1117,8 @@ class DimAngularEntity(CADEntity):
 
     def clone(self) -> "DimAngularEntity":
         return DimAngularEntity(self._center, self._p1, self._p2,
-                                self._radius, self.layer)
+                                self._radius, self.layer,
+                                self.arrow_size, self.text_height)
 
 
 class HatchEntity(CADEntity):

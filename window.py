@@ -1,8 +1,12 @@
 from PySide6.QtWidgets import (
-    QMainWindow, QToolBar, QStatusBar, QLabel, QWidget, QVBoxLayout
+    QMainWindow, QToolBar, QStatusBar, QLabel, QWidget, QVBoxLayout,
+    QFileDialog, QMessageBox, QDockWidget,
 )
 from PySide6.QtGui import QAction, QKeySequence, QFont
 from PySide6.QtCore import Qt
+
+from cad.export import export_dxf, export_pdf, HAS_EZDXF
+from cad.properties_panel import PropertiesPanel
 
 from cad.scene import CADScene
 from cad.view import CADView
@@ -225,6 +229,7 @@ class MainWindow(QMainWindow):
         self._build_draw_toolbar()
         self._build_snap_bar()
         self._build_menu()
+        self._build_properties_dock()
 
         self._activate_tool("select")
 
@@ -345,7 +350,20 @@ class MainWindow(QMainWindow):
     # ── Menu ──────────────────────────────────────────────────────────────────
 
     def _build_menu(self):
-        mb   = self.menuBar()
+        mb = self.menuBar()
+
+        # ── File ──────────────────────────────────────────────────────────────
+        file_menu = mb.addMenu("File")
+
+        export_dxf_action = file_menu.addAction("Export DXF…")
+        export_dxf_action.setShortcut("Ctrl+Shift+D")
+        export_dxf_action.triggered.connect(self._export_dxf)
+
+        export_pdf_action = file_menu.addAction("Export PDF…")
+        export_pdf_action.setShortcut("Ctrl+Shift+P")
+        export_pdf_action.triggered.connect(self._export_pdf)
+
+        # ── Edit ──────────────────────────────────────────────────────────────
         edit = mb.addMenu("Edit")
 
         undo = edit.addAction("Undo")
@@ -361,6 +379,55 @@ class MainWindow(QMainWindow):
         delete = edit.addAction("Delete selected")
         delete.setShortcut("Delete")
         delete.triggered.connect(self.view._delete_selected)
+
+    # ── Properties dock ───────────────────────────────────────────────────────
+
+    def _build_properties_dock(self):
+        self._props_panel = PropertiesPanel(self.scene)
+        dock = QDockWidget("Properties", self)
+        dock.setWidget(self._props_panel)
+        dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea |
+                             Qt.DockWidgetArea.LeftDockWidgetArea)
+        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable |
+                         QDockWidget.DockWidgetFeature.DockWidgetFloatable)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+
+    # ── Export ────────────────────────────────────────────────────────────────
+
+    def _export_dxf(self):
+        if not HAS_EZDXF:
+            QMessageBox.critical(self, "Missing dependency",
+                                 "ezdxf is not installed.\n\n"
+                                 "Run:  pip install ezdxf")
+            return
+        if not self.scene.all_entities():
+            QMessageBox.information(self, "Nothing to export", "The drawing is empty.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export DXF", "", "DXF Files (*.dxf)"
+        )
+        if not path:
+            return
+        try:
+            export_dxf(self.scene, path)
+            self.status.showMessage(f"Exported: {path}", 5000)
+        except Exception as e:
+            QMessageBox.critical(self, "Export failed", str(e))
+
+    def _export_pdf(self):
+        if not self.scene.all_entities():
+            QMessageBox.information(self, "Nothing to export", "The drawing is empty.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export PDF", "", "PDF Files (*.pdf)"
+        )
+        if not path:
+            return
+        try:
+            export_pdf(self.scene, path)
+            self.status.showMessage(f"Exported: {path}", 5000)
+        except Exception as e:
+            QMessageBox.critical(self, "Export failed", str(e))
 
     # ── Command handling ──────────────────────────────────────────────────────
 
