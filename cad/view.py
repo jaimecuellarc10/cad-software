@@ -196,10 +196,13 @@ class CADView(QGraphicsView):
             return
 
         if self.current_tool:
+            was_idle   = getattr(self.current_tool, 'is_idle', True)
+            undo_before = self.undo_stack._idx
             raw     = self.mapToScene(event.position().toPoint())
             snapped = self._snap_result.point if self._snap_result else raw
             self.current_tool.on_press(snapped, event)
             self._update_prompt()
+            self._auto_exit(was_idle, undo_before)
 
         super().mousePressEvent(event)
 
@@ -338,8 +341,10 @@ class CADView(QGraphicsView):
             if self._command_bar and self._command_bar.has_input():
                 self._command_bar.submit()
             elif self.current_tool:
+                was_idle = getattr(self.current_tool, 'is_idle', True)
                 self.current_tool.on_key(event)
                 self._update_prompt()
+                self._auto_exit(was_idle)
 
         elif key == Qt.Key.Key_Tab:
             if self._command_bar and self._command_bar.has_input():
@@ -423,6 +428,7 @@ class CADView(QGraphicsView):
         elif not getattr(tool, "is_idle", True):
             tool.finish()          # commit current op, tool stays active but idle
             self._update_prompt()
+            self._auto_exit(False)
         else:
             if self._select_tool:
                 self.set_tool(self._select_tool)
@@ -457,5 +463,20 @@ class CADView(QGraphicsView):
         if self._on_tool_change:
             self._on_tool_change(name)
 
+    def _auto_exit(self, was_idle: bool, undo_before: int = -1):
+        """Switch to select when a drawing tool places an entity or becomes idle."""
+        if self.current_tool is None or self.current_tool is self._select_tool:
+            return
+        if not self._on_tool_done:
+            return
+        now_idle = getattr(self.current_tool, 'is_idle', True)
+        if not was_idle and now_idle:
+            # Tool transitioned from active → idle (e.g. circle, arc, dimlinear)
+            self._on_tool_done()
+        elif was_idle and now_idle and undo_before >= 0 and self.undo_stack._idx > undo_before:
+            # Always-idle tool (e.g. hatch, point) just placed an entity
+            self._on_tool_done()
+
     _on_tool_change  = None   # called when view changes tool internally
     _on_space_recall = None   # called when Space is pressed in select mode
+    _on_tool_done    = None   # called when a drawing tool transitions to idle

@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QColorDialog,
 )
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QObject, QEvent
 
 from .constants import GRID_UNIT
 from .entities import (
@@ -14,6 +14,8 @@ from .entities import (
     XLineEntity, TextEntity, SplineEntity, PointEntity,
     DimLinearEntity, DimAngularEntity, HatchEntity,
 )
+
+_HATCH_PATTERNS = ["ANSI31", "SOLID", "HORIZONTAL", "VERTICAL", "CROSS", "NET45", "NET"]
 
 _LINETYPES = [
     ("Solid",        Qt.PenStyle.SolidLine),
@@ -32,12 +34,29 @@ _HAS_LINEWEIGHT = (LineEntity, PolylineEntity, CircleEntity, ArcEntity,
                    EllipseEntity, XLineEntity, SplineEntity)
 
 
+class _TabFilter(QObject):
+    """Catches Tab/Backtab in any panel widget and returns focus to the CAD view."""
+    def __init__(self, view):
+        super().__init__()
+        self._view = view
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress and event.key() in (
+                Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+            self._view.setFocus()
+            self._view.keyPressEvent(event)
+            return True
+        return False
+
+
 class PropertiesPanel(QWidget):
-    def __init__(self, scene, parent=None):
+    def __init__(self, scene, view, parent=None):
         super().__init__(parent)
         self.setMinimumWidth(210)
         self.setMaximumWidth(270)
         self._scene    = scene
+        self._view     = view
+        self._tab_filter = _TabFilter(view)
         self._updating = False
         self._last_ids: list[int] = []
 
@@ -106,6 +125,12 @@ class PropertiesPanel(QWidget):
             self._body_layout.addStretch()
         finally:
             self._updating = False
+        self._install_tab_filters()
+
+    def _install_tab_filters(self):
+        for w in self.findChildren(QWidget):
+            w.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+            w.installEventFilter(self._tab_filter)
 
     # ── Form construction ─────────────────────────────────────────────────────
 
@@ -227,6 +252,24 @@ class PropertiesPanel(QWidget):
 
             self._body_layout.addLayout(form)
 
+        elif isinstance(ent, HatchEntity):
+            self._body_layout.addWidget(_section_label("Hatch"))
+            form = _form()
+
+            pat_combo = QComboBox()
+            pat_combo.addItems(_HATCH_PATTERNS)
+            idx = _HATCH_PATTERNS.index(ent._pattern) if ent._pattern in _HATCH_PATTERNS else 0
+            pat_combo.setCurrentIndex(idx)
+            pat_combo.currentIndexChanged.connect(
+                lambda i: self._entity_attr(ent, '_pattern', _HATCH_PATTERNS[i]))
+            form.addRow("Pattern:", pat_combo)
+
+            sc = _spin(0.1, 200.0, 0.1, 2, ent._scale)
+            sc.valueChanged.connect(lambda v: self._entity_attr(ent, '_scale', v))
+            form.addRow("Scale:", sc)
+
+            self._body_layout.addLayout(form)
+
     # ── Property changers ─────────────────────────────────────────────────────
 
     def _pick_color(self, selected):
@@ -265,6 +308,13 @@ class PropertiesPanel(QWidget):
         ent.update()
 
     def _text_attr(self, ent, attr, value):
+        if self._updating:
+            return
+        ent.prepareGeometryChange()
+        setattr(ent, attr, value)
+        ent.update()
+
+    def _entity_attr(self, ent, attr, value):
         if self._updating:
             return
         ent.prepareGeometryChange()

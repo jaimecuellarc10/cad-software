@@ -1144,24 +1144,63 @@ class HatchEntity(CADEntity):
         if len(self._boundary) < 3:
             return
         poly = QPolygonF(self._boundary)
-        color = QColor(255, 165, 0) if self._selected else QColor("#ffffff")
+        color = QColor(255, 165, 0) if self._selected else (self.color_override or self.layer.color)
         path = QPainterPath()
         path.addPolygon(poly)
         painter.save()
         if self._pattern == "SOLID":
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(QColor(255, 255, 255, 60)))
+            fill = QColor(color)
+            fill.setAlpha(80)
+            painter.setBrush(QBrush(fill))
             painter.drawPolygon(poly)
         else:
             painter.setClipPath(path)
             painter.setPen(QPen(color, 0))
             rect = self.boundingRect().adjusted(-100, -100, 100, 100)
             spacing = max(1.0, 10.0 * self._scale)
-            x = rect.left() - rect.height()
-            while x <= rect.right() + rect.height():
-                painter.drawLine(QPointF(x, rect.bottom()),
-                                 QPointF(x + rect.height(), rect.top()))
-                x += spacing
+            h = rect.height() + rect.width()
+            if self._pattern in ("ANSI31",):
+                # 45° diagonal (bottom-left to top-right in Qt coords)
+                x = rect.left() - h
+                while x <= rect.right() + h:
+                    painter.drawLine(QPointF(x, rect.bottom()),
+                                     QPointF(x + h, rect.top()))
+                    x += spacing
+            elif self._pattern == "NET45":
+                # -45° diagonal
+                x = rect.left() - h
+                while x <= rect.right() + h:
+                    painter.drawLine(QPointF(x, rect.top()),
+                                     QPointF(x + h, rect.bottom()))
+                    x += spacing
+            elif self._pattern == "CROSS":
+                # Crosshatch: both diagonals
+                x = rect.left() - h
+                while x <= rect.right() + h:
+                    painter.drawLine(QPointF(x, rect.bottom()), QPointF(x + h, rect.top()))
+                    painter.drawLine(QPointF(x, rect.top()), QPointF(x + h, rect.bottom()))
+                    x += spacing
+            elif self._pattern == "HORIZONTAL":
+                y = rect.top()
+                while y <= rect.bottom():
+                    painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+                    y += spacing
+            elif self._pattern == "VERTICAL":
+                x = rect.left()
+                while x <= rect.right():
+                    painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+                    x += spacing
+            elif self._pattern == "NET":
+                # Grid: horizontal + vertical
+                y = rect.top()
+                while y <= rect.bottom():
+                    painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+                    y += spacing
+                x = rect.left()
+                while x <= rect.right():
+                    painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+                    x += spacing
         painter.restore()
         if self._selected:
             self._paint_grips(painter)

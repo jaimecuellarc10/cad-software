@@ -82,20 +82,34 @@ class XLineTool(BaseTool):
         self.cancel()
 
     def draw_overlay(self, painter: QPainter):
-        if self._state != STATE_DIR or self._point is None or self._cursor is None:
-            return
         v = self.view
-        ang = self._current_angle()
-        rad = math.radians(ang)
-        HALF = 45000.0
-        dx = math.cos(rad) * HALF; dy = math.sin(rad) * HALF
-        p1 = v.mapFromScene(QPointF(self._point.x()-dx, self._point.y()+dy))
-        p2 = v.mapFromScene(QPointF(self._point.x()+dx, self._point.y()-dy))
-        painter.setPen(QPen(PREVIEW_COLOR, 1, Qt.PenStyle.DashDotLine))
-        painter.drawLine(p1, p2)
-        cp = v.mapFromScene(self._cursor)
-        painter.setPen(QPen(PREVIEW_COLOR, 1))
-        painter.drawText(cp.x()+8, cp.y()-8, f"{ang:.1f}°")
+        if self._cursor is None:
+            return
+        if self._state == STATE_POINT:
+            # Show faint crosshair at cursor to indicate xline anchor placement
+            HALF = 45000.0
+            ghost_pen = QPen(QColor(255, 255, 255, 60), 1, Qt.PenStyle.DashDotLine)
+            painter.setPen(ghost_pen)
+            # Horizontal
+            p1 = v.mapFromScene(QPointF(self._cursor.x() - HALF, self._cursor.y()))
+            p2 = v.mapFromScene(QPointF(self._cursor.x() + HALF, self._cursor.y()))
+            painter.drawLine(p1, p2)
+            # Vertical
+            p3 = v.mapFromScene(QPointF(self._cursor.x(), self._cursor.y() - HALF))
+            p4 = v.mapFromScene(QPointF(self._cursor.x(), self._cursor.y() + HALF))
+            painter.drawLine(p3, p4)
+        elif self._state == STATE_DIR and self._point is not None:
+            ang = self._current_angle()
+            rad = math.radians(ang)
+            HALF = 45000.0
+            dx = math.cos(rad) * HALF; dy = math.sin(rad) * HALF
+            p1 = v.mapFromScene(QPointF(self._point.x()-dx, self._point.y()+dy))
+            p2 = v.mapFromScene(QPointF(self._point.x()+dx, self._point.y()-dy))
+            painter.setPen(QPen(PREVIEW_COLOR, 1, Qt.PenStyle.DashDotLine))
+            painter.drawLine(p1, p2)
+            cp = v.mapFromScene(self._cursor)
+            painter.setPen(QPen(PREVIEW_COLOR, 1))
+            painter.drawText(cp.x()+8, cp.y()-8, f"{ang:.1f}°")
 
     def _current_angle(self) -> float:
         if self._point is None or self._cursor is None: return 0.0

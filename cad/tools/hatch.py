@@ -21,19 +21,20 @@ class HatchTool(BaseTool):
     def is_idle(self):
         return True
 
+    _PATTERNS = ("ANSI31", "SOLID", "HORIZONTAL", "VERTICAL", "CROSS", "NET45", "NET")
+
     @property
     def prompt(self):
-        return "HATCH  Click inside a closed region to hatch  [type SOLID or ANSI31 to change pattern]"
+        return (f"HATCH  [{self._pattern}  scale={self._scale:.2g}]"
+                f"  Click inside closed region  [ANSI31/SOLID/HORIZONTAL/VERTICAL/CROSS/NET45/NET  or scale number]")
 
     def activate(self, view):
         super().activate(view)
         self._state = STATE_PICK
-        self._pattern = "ANSI31"
-        self._scale = 1.0
 
     def on_command(self, cmd: str) -> bool:
         up = cmd.strip().upper()
-        if up in ("SOLID", "ANSI31"):
+        if up in self._PATTERNS:
             self._pattern = up
             return True
         try:

@@ -224,12 +224,13 @@ class MainWindow(QMainWindow):
         self.view._text_tool       = self._text_tool
         self.view._on_tool_change  = self._sync_tool_buttons
         self.view._on_space_recall = self._recall_last_tool
+        self.view._on_tool_done    = lambda: self._activate_tool("select")
 
         # ── UI ────────────────────────────────────────────────────────────────
         self._build_draw_toolbar()
         self._build_snap_bar()
-        self._build_menu()
         self._build_properties_dock()
+        self._build_menu()
 
         self._activate_tool("select")
 
@@ -380,17 +381,26 @@ class MainWindow(QMainWindow):
         delete.setShortcut("Delete")
         delete.triggered.connect(self.view._delete_selected)
 
+        # ── View ──────────────────────────────────────────────────────────────
+        view_menu = mb.addMenu("View")
+        props_action = self._props_dock.toggleViewAction()
+        props_action.setText("Properties Panel")
+        props_action.setShortcut("Ctrl+Shift+I")
+        view_menu.addAction(props_action)
+
     # ── Properties dock ───────────────────────────────────────────────────────
 
     def _build_properties_dock(self):
-        self._props_panel = PropertiesPanel(self.scene)
-        dock = QDockWidget("Properties", self)
-        dock.setWidget(self._props_panel)
-        dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea |
-                             Qt.DockWidgetArea.LeftDockWidgetArea)
-        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable |
-                         QDockWidget.DockWidgetFeature.DockWidgetFloatable)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        self._props_panel = PropertiesPanel(self.scene, self.view)
+        self._props_dock = QDockWidget("Properties", self)
+        self._props_dock.setWidget(self._props_panel)
+        self._props_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea |
+                                         Qt.DockWidgetArea.LeftDockWidgetArea)
+        self._props_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable  |
+            QDockWidget.DockWidgetFeature.DockWidgetFloatable |
+            QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._props_dock)
 
     # ── Export ────────────────────────────────────────────────────────────────
 
