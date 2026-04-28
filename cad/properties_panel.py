@@ -1,37 +1,26 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QFormLayout, QLabel, QPushButton,
-    QDoubleSpinBox, QComboBox, QLineEdit, QFrame, QScrollArea,
-    QColorDialog,
-)
-from PySide6.QtGui import QColor, QFont
 from PySide6.QtCore import Qt, QTimer, QObject, QEvent
+from PySide6.QtCore import QPointF
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QWidget, QVBoxLayout
 
 from .constants import GRID_UNIT
 from .entities import (
-    LineEntity, PolylineEntity, CircleEntity, ArcEntity, EllipseEntity,
-    XLineEntity, TextEntity, SplineEntity, PointEntity,
-    DimLinearEntity, DimAngularEntity, HatchEntity,
+    CADEntity, LineEntity, PolylineEntity, CircleEntity, ArcEntity,
+    EllipseEntity, XLineEntity, TextEntity, DimLinearEntity, DimAngularEntity,
+    HatchEntity, SplineEntity, PointEntity,
 )
+from widgets.properties_panel import PropertiesPanel as _NewPanel
 
-_HATCH_PATTERNS = ["ANSI31", "SOLID", "HORIZONTAL", "VERTICAL", "CROSS", "NET45", "NET"]
 
-_LINETYPES = [
-    ("Solid",        Qt.PenStyle.SolidLine),
-    ("Dashed",       Qt.PenStyle.DashLine),
-    ("Dotted",       Qt.PenStyle.DotLine),
-    ("Dash-Dot",     Qt.PenStyle.DashDotLine),
-    ("Dash-Dot-Dot", Qt.PenStyle.DashDotDotLine),
-]
-_LT_LABELS = [lt[0] for lt in _LINETYPES]
-_LT_STYLES = [lt[1] for lt in _LINETYPES]
-
-# Entity types that carry their own linetype attribute
-_HAS_LINETYPE = (LineEntity, PolylineEntity, CircleEntity, ArcEntity,
-                 EllipseEntity, XLineEntity)
-_HAS_LINEWEIGHT = (LineEntity, PolylineEntity, CircleEntity, ArcEntity,
-                   EllipseEntity, XLineEntity, SplineEntity)
+_LT_LABEL_TO_STYLE = {
+    "Solid":        Qt.PenStyle.SolidLine,
+    "Dashed":       Qt.PenStyle.DashLine,
+    "Dotted":       Qt.PenStyle.DotLine,
+    "Dash-Dot":     Qt.PenStyle.DashDotLine,
+    "Dash-Dot-Dot": Qt.PenStyle.DashDotDotLine,
+}
 
 
 class _TabFilter(QObject):
@@ -52,35 +41,21 @@ class _TabFilter(QObject):
 class PropertiesPanel(QWidget):
     def __init__(self, scene, view, parent=None):
         super().__init__(parent)
-        self.setMinimumWidth(210)
-        self.setMaximumWidth(270)
-        self._scene    = scene
-        self._view     = view
+        self.setMinimumWidth(220)
+        self.setMaximumWidth(300)
+        self._scene      = scene
+        self._view       = view
         self._tab_filter = _TabFilter(view)
-        self._updating = False
         self._last_ids: list[int] = []
+        self._selected:  list[CADEntity] = []
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        hdr = QLabel("  Properties")
-        hdr.setStyleSheet(
-            "background:#2a2a2a; color:#cccccc; font-weight:bold; padding:6px 8px;")
-        outer.addWidget(hdr)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        outer.addWidget(scroll)
-
-        self._body = QWidget()
-        scroll.setWidget(self._body)
-        self._body_layout = QVBoxLayout(self._body)
-        self._body_layout.setContentsMargins(8, 8, 8, 8)
-        self._body_layout.setSpacing(4)
-
-        self._show_empty()
+        self._panel = _NewPanel()
+        self._panel.propertyChanged.connect(self._apply_property)
+        layout.addWidget(self._panel)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._poll)
@@ -91,280 +66,163 @@ class PropertiesPanel(QWidget):
     def _poll(self):
         selected = self._scene.selected_entities()
         ids = [id(e) for e in selected]
-        if ids != self._last_ids:
-            self._last_ids = ids
-            self._rebuild(selected)
-
-    # ── Layout helpers ────────────────────────────────────────────────────────
-
-    def _clear(self):
-        while self._body_layout.count():
-            item = self._body_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-            elif item.layout():
-                _clear_layout(item.layout())
-
-    def _show_empty(self):
-        self._clear()
-        lbl = QLabel("No selection")
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet("color:#555; margin-top:16px;")
-        self._body_layout.addWidget(lbl)
-        self._body_layout.addStretch()
-
-    def _rebuild(self, selected: list):
-        self._updating = True
-        try:
-            self._clear()
-            if not selected:
-                self._show_empty()
-                return
-            self._build_form(selected)
-            self._body_layout.addStretch()
-        finally:
-            self._updating = False
-        self._install_tab_filters()
-
-    def _install_tab_filters(self):
-        for w in self.findChildren(QWidget):
+        if ids == self._last_ids:
+            return
+        self._last_ids = ids
+        self._selected = selected
+        objects = [e.to_props_dict() for e in selected]
+        self._panel.set_selection(objects)
+        # Install tab filter on newly created editor widgets
+        for w in self._panel.findChildren(QWidget):
             w.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
             w.installEventFilter(self._tab_filter)
 
-    # ── Form construction ─────────────────────────────────────────────────────
+    # ── Property application ──────────────────────────────────────────────────
 
-    def _build_form(self, selected: list):
-        multi = len(selected) > 1
-        ent   = selected[0]
+    def _apply_property(self, prop_name: str, value):
+        for e in self._selected:
+            self._apply_one(e, prop_name, value)
 
-        # Type label
-        if multi:
-            type_lbl = f"{len(selected)} objects"
-        else:
-            type_lbl = type(ent).__name__.replace("Entity", "")
-        lbl = QLabel(type_lbl)
-        lbl.setStyleSheet("color:#999; font-size:10px; padding-bottom:2px;")
-        self._body_layout.addWidget(lbl)
+    def _apply_one(self, e: CADEntity, prop: str, val):
+        if prop == "color":
+            if isinstance(val, QColor):
+                e.color_override = val
+                e.update()
 
-        # ── Appearance ────────────────────────────────────────────────────────
-        self._body_layout.addWidget(_section_label("Appearance"))
-        form = _form()
-
-        # Layer (read-only)
-        layer_names = set(e.layer.name for e in selected if e.layer)
-        layer_text = list(layer_names)[0] if len(layer_names) == 1 else "—"
-        form.addRow("Layer:", _ro_label(layer_text))
-
-        # Color
-        color = ent.color_override or ent.layer.color
-        self._color_btn = QPushButton()
-        self._color_btn.setFixedHeight(22)
-        _apply_color_style(self._color_btn, color)
-        self._color_btn.clicked.connect(lambda: self._pick_color(selected))
-        form.addRow("Color:", self._color_btn)
-
-        # Line weight
-        if any(isinstance(e, _HAS_LINEWEIGHT) for e in selected):
-            lw = (ent.lineweight if hasattr(ent, 'lineweight') and ent.lineweight is not None
-                  else ent.layer.lineweight)
-            self._weight_spin = _spin(0.1, 10.0, 0.1, 1, lw)
-            self._weight_spin.valueChanged.connect(
-                lambda v: self._apply(selected, '_set_weight', v))
-            form.addRow("Weight:", self._weight_spin)
-
-        # Line type
-        if any(isinstance(e, _HAS_LINETYPE) for e in selected):
-            lt = ent.linetype if hasattr(ent, 'linetype') else Qt.PenStyle.SolidLine
-            idx = _LT_STYLES.index(lt) if lt in _LT_STYLES else 0
-            self._lt_combo = QComboBox()
-            self._lt_combo.addItems(_LT_LABELS)
-            self._lt_combo.setCurrentIndex(idx)
-            self._lt_combo.currentIndexChanged.connect(
-                lambda i: self._apply(selected, '_set_linetype', _LT_STYLES[i]))
-            form.addRow("Line type:", self._lt_combo)
-
-        self._body_layout.addLayout(form)
-
-        # ── Entity-specific (single selection only) ───────────────────────────
-        if not multi:
-            self._build_specific(ent)
-
-    def _build_specific(self, ent):
-        if isinstance(ent, DimLinearEntity):
-            self._body_layout.addWidget(_section_label("Dimension"))
-            form = _form()
-
-            off = _spin(-9999, 9999, 1.0, 2, ent._offset / GRID_UNIT)
-            off.valueChanged.connect(
-                lambda v: self._dim_attr(ent, '_offset', v * GRID_UNIT))
-            form.addRow("Offset:", off)
-
-            arr = _spin(1.0, 100.0, 0.5, 1, ent.arrow_size)
-            arr.valueChanged.connect(lambda v: self._dim_attr(ent, 'arrow_size', v))
-            form.addRow("Arrow size:", arr)
-
-            txh = _spin(0.5, 50.0, 0.5, 1, ent.text_height)
-            txh.valueChanged.connect(lambda v: self._dim_attr(ent, 'text_height', v))
-            form.addRow("Text height:", txh)
-
-            ovr = QLineEdit(ent._text_override)
-            ovr.setPlaceholderText("auto")
-            ovr.textChanged.connect(lambda t: self._dim_attr(ent, '_text_override', t))
-            form.addRow("Text override:", ovr)
-
-            self._body_layout.addLayout(form)
-
-        elif isinstance(ent, DimAngularEntity):
-            self._body_layout.addWidget(_section_label("Dimension"))
-            form = _form()
-
-            rad = _spin(1.0, 9999.0, 1.0, 2, ent._radius / GRID_UNIT)
-            rad.valueChanged.connect(
-                lambda v: self._dim_attr(ent, '_radius', v * GRID_UNIT))
-            form.addRow("Arc radius:", rad)
-
-            arr = _spin(1.0, 100.0, 0.5, 1, ent.arrow_size)
-            arr.valueChanged.connect(lambda v: self._dim_attr(ent, 'arrow_size', v))
-            form.addRow("Arrow size:", arr)
-
-            txh = _spin(0.5, 50.0, 0.5, 1, ent.text_height)
-            txh.valueChanged.connect(lambda v: self._dim_attr(ent, 'text_height', v))
-            form.addRow("Text height:", txh)
-
-            self._body_layout.addLayout(form)
-
-        elif isinstance(ent, TextEntity):
-            self._body_layout.addWidget(_section_label("Text"))
-            form = _form()
-
-            content = QLineEdit(ent._text)
-            content.textChanged.connect(lambda t: self._text_attr(ent, '_text', t))
-            form.addRow("Content:", content)
-
-            h = _spin(0.1, 100.0, 0.5, 1, ent._height)
-            h.valueChanged.connect(lambda v: self._text_attr(ent, '_height', v))
-            form.addRow("Height:", h)
-
-            rot = _spin(-360.0, 360.0, 5.0, 1, ent._angle_deg)
-            rot.valueChanged.connect(lambda v: self._text_attr(ent, '_angle_deg', v))
-            form.addRow("Rotation°:", rot)
-
-            self._body_layout.addLayout(form)
-
-        elif isinstance(ent, HatchEntity):
-            self._body_layout.addWidget(_section_label("Hatch"))
-            form = _form()
-
-            pat_combo = QComboBox()
-            pat_combo.addItems(_HATCH_PATTERNS)
-            idx = _HATCH_PATTERNS.index(ent._pattern) if ent._pattern in _HATCH_PATTERNS else 0
-            pat_combo.setCurrentIndex(idx)
-            pat_combo.currentIndexChanged.connect(
-                lambda i: self._entity_attr(ent, '_pattern', _HATCH_PATTERNS[i]))
-            form.addRow("Pattern:", pat_combo)
-
-            sc = _spin(0.1, 200.0, 0.1, 2, ent._scale)
-            sc.valueChanged.connect(lambda v: self._entity_attr(ent, '_scale', v))
-            form.addRow("Scale:", sc)
-
-            self._body_layout.addLayout(form)
-
-    # ── Property changers ─────────────────────────────────────────────────────
-
-    def _pick_color(self, selected):
-        first   = selected[0]
-        current = first.color_override or first.layer.color
-        color   = QColorDialog.getColor(current, self, "Pick Color")
-        if not color.isValid():
-            return
-        for e in selected:
-            e.color_override = color
+        elif prop == "lineweight" and hasattr(e, "lineweight"):
+            e.lineweight = float(val)
             e.update()
-        _apply_color_style(self._color_btn, color)
 
-    def _apply(self, selected, method, value):
-        if self._updating:
-            return
-        getattr(self, method)(selected, value)
+        elif prop == "linetype" and hasattr(e, "linetype"):
+            e.linetype = _LT_LABEL_TO_STYLE.get(val, Qt.PenStyle.SolidLine)
+            e.update()
 
-    def _set_weight(self, selected, value):
-        for e in selected:
-            if hasattr(e, 'lineweight'):
-                e.lineweight = value
-                e.update()
+        # ── Line ──────────────────────────────────────────────────────────────
+        elif prop == "start_x" and isinstance(e, LineEntity):
+            e.prepareGeometryChange()
+            e._p1 = QPointF(float(val), e._p1.y())
+            e.update()
+        elif prop == "start_y" and isinstance(e, LineEntity):
+            e.prepareGeometryChange()
+            e._p1 = QPointF(e._p1.x(), float(val))
+            e.update()
+        elif prop == "end_x" and isinstance(e, LineEntity):
+            e.prepareGeometryChange()
+            e._p2 = QPointF(float(val), e._p2.y())
+            e.update()
+        elif prop == "end_y" and isinstance(e, LineEntity):
+            e.prepareGeometryChange()
+            e._p2 = QPointF(e._p2.x(), float(val))
+            e.update()
 
-    def _set_linetype(self, selected, style):
-        for e in selected:
-            if hasattr(e, 'linetype'):
-                e.linetype = style
-                e.update()
+        # ── Circle / Arc / Ellipse center ─────────────────────────────────────
+        elif prop == "center_x" and isinstance(e, (CircleEntity, ArcEntity, EllipseEntity)):
+            e.prepareGeometryChange()
+            e._center = QPointF(float(val), e._center.y())
+            e.update()
+        elif prop == "center_y" and isinstance(e, (CircleEntity, ArcEntity, EllipseEntity)):
+            e.prepareGeometryChange()
+            e._center = QPointF(e._center.x(), float(val))
+            e.update()
 
-    def _dim_attr(self, ent, attr, value):
-        if self._updating:
-            return
-        ent.prepareGeometryChange()
-        setattr(ent, attr, value)
-        ent.update()
+        # ── Circle / Arc radius ───────────────────────────────────────────────
+        elif prop == "radius" and isinstance(e, (CircleEntity, ArcEntity)):
+            e.prepareGeometryChange()
+            e._radius = float(val)
+            e.update()
 
-    def _text_attr(self, ent, attr, value):
-        if self._updating:
-            return
-        ent.prepareGeometryChange()
-        setattr(ent, attr, value)
-        ent.update()
+        # ── Ellipse ───────────────────────────────────────────────────────────
+        elif prop == "radius_x" and isinstance(e, EllipseEntity):
+            e.prepareGeometryChange()
+            e._rx = float(val)
+            e.update()
+        elif prop == "radius_y" and isinstance(e, EllipseEntity):
+            e.prepareGeometryChange()
+            e._ry = float(val)
+            e.update()
 
-    def _entity_attr(self, ent, attr, value):
-        if self._updating:
-            return
-        ent.prepareGeometryChange()
-        setattr(ent, attr, value)
-        ent.update()
+        # ── Arc angles ────────────────────────────────────────────────────────
+        elif prop == "start_angle" and isinstance(e, ArcEntity):
+            e.prepareGeometryChange()
+            e._start_angle = float(val)
+            e.update()
+        elif prop == "span_angle" and isinstance(e, ArcEntity):
+            e.prepareGeometryChange()
+            e._span_angle = float(val)
+            e.update()
 
+        # ── XLine ─────────────────────────────────────────────────────────────
+        elif prop == "pos_x" and isinstance(e, XLineEntity):
+            e.prepareGeometryChange()
+            e._point = QPointF(float(val), e._point.y())
+            e.update()
+        elif prop == "pos_y" and isinstance(e, XLineEntity):
+            e.prepareGeometryChange()
+            e._point = QPointF(e._point.x(), float(val))
+            e.update()
+        elif prop == "angle" and isinstance(e, XLineEntity):
+            e.prepareGeometryChange()
+            e._angle_deg = float(val)
+            e.update()
 
-# ── Widget helpers ─────────────────────────────────────────────────────────────
+        # ── Text / Point position ─────────────────────────────────────────────
+        elif prop == "pos_x" and isinstance(e, (TextEntity, PointEntity)):
+            e.prepareGeometryChange()
+            e._pos = QPointF(float(val), e._pos.y())
+            e.update()
+        elif prop == "pos_y" and isinstance(e, (TextEntity, PointEntity)):
+            e.prepareGeometryChange()
+            e._pos = QPointF(e._pos.x(), float(val))
+            e.update()
 
-def _section_label(title: str) -> QLabel:
-    lbl = QLabel(title.upper())
-    lbl.setStyleSheet(
-        "color:#777; font-size:9px; font-weight:bold;"
-        "border-top:1px solid #333; margin-top:6px; padding-top:5px;")
-    return lbl
+        # ── Rotation (Text and Ellipse share the key) ─────────────────────────
+        elif prop == "rotation" and isinstance(e, (TextEntity, EllipseEntity)):
+            e.prepareGeometryChange()
+            e._angle_deg = float(val)
+            e.update()
 
+        # ── Text content / height ─────────────────────────────────────────────
+        elif prop == "text_content" and isinstance(e, TextEntity):
+            e.prepareGeometryChange()
+            e._text = str(val)
+            e.update()
+        elif prop == "text_height" and isinstance(e, TextEntity):
+            e.prepareGeometryChange()
+            e._height = float(val)
+            e.update()
 
-def _ro_label(text: str) -> QLabel:
-    lbl = QLabel(text)
-    lbl.setStyleSheet("color:#888;")
-    return lbl
+        # ── Hatch ─────────────────────────────────────────────────────────────
+        elif prop == "pattern" and isinstance(e, HatchEntity):
+            e.prepareGeometryChange()
+            e._pattern = str(val)
+            e.update()
+        elif prop == "hatch_scale" and isinstance(e, HatchEntity):
+            e.prepareGeometryChange()
+            e._scale = float(val)
+            e.update()
 
+        # ── Dimension (linear) ────────────────────────────────────────────────
+        elif prop == "offset" and isinstance(e, DimLinearEntity):
+            e.prepareGeometryChange()
+            e._offset = float(val) * GRID_UNIT
+            e.update()
+        elif prop == "text_override" and isinstance(e, DimLinearEntity):
+            e.prepareGeometryChange()
+            e._text_override = str(val)
+            e.update()
 
-def _form() -> QFormLayout:
-    f = QFormLayout()
-    f.setSpacing(5)
-    f.setContentsMargins(0, 2, 0, 2)
-    f.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-    return f
+        # ── Dimension (angular) ───────────────────────────────────────────────
+        elif prop == "arc_radius" and isinstance(e, DimAngularEntity):
+            e.prepareGeometryChange()
+            e._radius = float(val) * GRID_UNIT
+            e.update()
 
-
-def _spin(lo: float, hi: float, step: float, decimals: int, value: float) -> QDoubleSpinBox:
-    s = QDoubleSpinBox()
-    s.setRange(lo, hi)
-    s.setSingleStep(step)
-    s.setDecimals(decimals)
-    s.setValue(value)
-    return s
-
-
-def _apply_color_style(btn: QPushButton, color: QColor):
-    r, g, b = color.red(), color.green(), color.blue()
-    fg = "#000" if (r * 299 + g * 587 + b * 114) > 128000 else "#fff"
-    btn.setStyleSheet(
-        f"background:{color.name()}; color:{fg}; border:1px solid #555; padding:2px;")
-    btn.setText(color.name().upper())
-
-
-def _clear_layout(layout):
-    while layout.count():
-        item = layout.takeAt(0)
-        if item.widget():
-            item.widget().deleteLater()
+        # ── Dimension (shared) ────────────────────────────────────────────────
+        elif prop == "arrow_size" and isinstance(e, (DimLinearEntity, DimAngularEntity)):
+            e.prepareGeometryChange()
+            e.arrow_size = float(val)
+            e.update()
+        elif prop == "dim_text_height" and isinstance(e, (DimLinearEntity, DimAngularEntity)):
+            e.prepareGeometryChange()
+            e.text_height = float(val)
+            e.update()

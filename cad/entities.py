@@ -8,6 +8,15 @@ from PySide6.QtCore import Qt, QRectF, QPointF, QLineF
 from .constants import SnapMode, GRIP_PX, GRID_UNIT
 
 
+_LT_LABELS = {
+    Qt.PenStyle.SolidLine:      "Solid",
+    Qt.PenStyle.DashLine:       "Dashed",
+    Qt.PenStyle.DotLine:        "Dotted",
+    Qt.PenStyle.DashDotLine:    "Dash-Dot",
+    Qt.PenStyle.DashDotDotLine: "Dash-Dot-Dot",
+}
+
+
 class Layer:
     def __init__(self, name: str, color: QColor = None,
                  linetype: Qt.PenStyle = Qt.PenStyle.SolidLine, lineweight: float = 1.5):
@@ -93,6 +102,20 @@ class CADEntity(QGraphicsItem):
     def clone(self) -> "CADEntity":
         """Return a deep copy of this entity (unselected, not in any scene)."""
         raise NotImplementedError
+
+    # ── Properties dict ───────────────────────────────────────────────────────
+
+    def _base_props(self) -> dict:
+        return {
+            "color": self.color_override or self.layer.color,
+            "layer": self.layer.name,
+        }
+
+    def to_props_dict(self) -> dict:
+        return {
+            "type": type(self).__name__.replace("Entity", ""),
+            "properties": self._base_props(),
+        }
 
     # ── Grip drawing ──────────────────────────────────────────────────────────
 
@@ -197,6 +220,23 @@ class LineEntity(CADEntity):
     def clone(self) -> "LineEntity":
         return LineEntity(self._p1, self._p2, self.layer, self.linetype, self.lineweight)
 
+    def to_props_dict(self) -> dict:
+        length = math.hypot(self._p2.x() - self._p1.x(), self._p2.y() - self._p1.y())
+        lw = self.lineweight if self.lineweight is not None else self.layer.lineweight
+        return {
+            "type": "Line",
+            "properties": {
+                **self._base_props(),
+                "linetype":  _LT_LABELS.get(self.linetype, "Solid"),
+                "lineweight": round(lw, 3),
+                "start_x": round(self._p1.x(), 3),
+                "start_y": round(self._p1.y(), 3),
+                "end_x":   round(self._p2.x(), 3),
+                "end_y":   round(self._p2.y(), 3),
+                "length":  round(length, 3),
+            },
+        }
+
 
 class PointEntity(CADEntity):
     def __init__(self, pos: QPointF, layer: Layer):
@@ -262,6 +302,16 @@ class PointEntity(CADEntity):
 
     def clone(self) -> "PointEntity":
         return PointEntity(self._pos, self.layer)
+
+    def to_props_dict(self) -> dict:
+        return {
+            "type": "Point",
+            "properties": {
+                **self._base_props(),
+                "pos_x": round(self._pos.x(), 3),
+                "pos_y": round(self._pos.y(), 3),
+            },
+        }
 
 
 # ── Polyline ──────────────────────────────────────────────────────────────────
@@ -361,6 +411,23 @@ class PolylineEntity(CADEntity):
     def clone(self) -> "PolylineEntity":
         return PolylineEntity(self._verts, self.layer, self.linetype, self.lineweight)
 
+    def to_props_dict(self) -> dict:
+        total = sum(
+            math.hypot(b.x() - a.x(), b.y() - a.y())
+            for a, b in self.segments()
+        )
+        lw = self.lineweight if self.lineweight is not None else self.layer.lineweight
+        return {
+            "type": "Polyline",
+            "properties": {
+                **self._base_props(),
+                "linetype":     _LT_LABELS.get(self.linetype, "Solid"),
+                "lineweight":   round(lw, 3),
+                "vertex_count": len(self._verts),
+                "length":       round(total, 3),
+            },
+        }
+
 
 # ── Circle ───────────────────────────────────────────────────────────────────
 
@@ -440,6 +507,20 @@ class CircleEntity(CADEntity):
 
     def clone(self) -> "CircleEntity":
         return CircleEntity(self._center, self._radius, self.layer, self.lineweight, self.linetype)
+
+    def to_props_dict(self) -> dict:
+        lw = self.lineweight if self.lineweight is not None else self.layer.lineweight
+        return {
+            "type": "Circle",
+            "properties": {
+                **self._base_props(),
+                "linetype":  _LT_LABELS.get(self.linetype, "Solid"),
+                "lineweight": round(lw, 3),
+                "center_x": round(self._center.x(), 3),
+                "center_y": round(self._center.y(), 3),
+                "radius":   round(self._radius, 3),
+            },
+        }
 
 
 # ── Arc ───────────────────────────────────────────────────────────────────────
@@ -564,6 +645,22 @@ class ArcEntity(CADEntity):
         return ArcEntity(self._center, self._radius, self._start_angle,
                          self._span_angle, self.layer, self.lineweight, self.linetype)
 
+    def to_props_dict(self) -> dict:
+        lw = self.lineweight if self.lineweight is not None else self.layer.lineweight
+        return {
+            "type": "Arc",
+            "properties": {
+                **self._base_props(),
+                "linetype":    _LT_LABELS.get(self.linetype, "Solid"),
+                "lineweight":  round(lw, 3),
+                "center_x":   round(self._center.x(), 3),
+                "center_y":   round(self._center.y(), 3),
+                "radius":     round(self._radius, 3),
+                "start_angle": round(self._start_angle, 3),
+                "span_angle":  round(self._span_angle, 3),
+            },
+        }
+
 
 class EllipseEntity(CADEntity):
     """Ellipse defined by center, semi-axes rx/ry, and rotation angle (CCW on screen)."""
@@ -674,6 +771,22 @@ class EllipseEntity(CADEntity):
         return EllipseEntity(self._center, self._rx, self._ry,
                              self._angle_deg, self.layer, self.lineweight, self.linetype)
 
+    def to_props_dict(self) -> dict:
+        lw = self.lineweight if self.lineweight is not None else self.layer.lineweight
+        return {
+            "type": "Ellipse",
+            "properties": {
+                **self._base_props(),
+                "linetype":  _LT_LABELS.get(self.linetype, "Solid"),
+                "lineweight": round(lw, 3),
+                "center_x":  round(self._center.x(), 3),
+                "center_y":  round(self._center.y(), 3),
+                "radius_x":  round(self._rx, 3),
+                "radius_y":  round(self._ry, 3),
+                "rotation":  round(self._angle_deg, 3),
+            },
+        }
+
 
 class XLineEntity(CADEntity):
     """Infinite construction line through _point in direction _angle_deg."""
@@ -766,6 +879,19 @@ class XLineEntity(CADEntity):
 
     def clone(self) -> "XLineEntity":
         return XLineEntity(self._point, self._angle_deg, self.layer, self.lineweight)
+
+    def to_props_dict(self) -> dict:
+        lw = self.lineweight if self.lineweight is not None else self.layer.lineweight
+        return {
+            "type": "XLine",
+            "properties": {
+                **self._base_props(),
+                "lineweight": round(lw, 3),
+                "pos_x": round(self._point.x(), 3),
+                "pos_y": round(self._point.y(), 3),
+                "angle": round(self._angle_deg, 3),
+            },
+        }
 
 
 class TextEntity(CADEntity):
@@ -866,6 +992,19 @@ class TextEntity(CADEntity):
     def clone(self) -> "TextEntity":
         return TextEntity(QPointF(self._pos), self._text, self._height,
                           self._angle_deg, self.layer)
+
+    def to_props_dict(self) -> dict:
+        return {
+            "type": "Text",
+            "properties": {
+                **self._base_props(),
+                "pos_x":        round(self._pos.x(), 3),
+                "pos_y":        round(self._pos.y(), 3),
+                "text_content": self._text,
+                "text_height":  round(self._height, 3),
+                "rotation":     round(self._angle_deg, 3),
+            },
+        }
 
 
 class DimLinearEntity(CADEntity):
@@ -996,6 +1135,18 @@ class DimLinearEntity(CADEntity):
                                self._text_override, self.layer,
                                self.arrow_size, self.text_height)
 
+    def to_props_dict(self) -> dict:
+        return {
+            "type": "DimLinear",
+            "properties": {
+                **self._base_props(),
+                "offset":          round(self._offset / GRID_UNIT, 3),
+                "arrow_size":      round(self.arrow_size, 3),
+                "dim_text_height": round(self.text_height, 3),
+                "text_override":   self._text_override,
+            },
+        }
+
 
 class DimAngularEntity(CADEntity):
     def __init__(self, center: QPointF, p1: QPointF, p2: QPointF,
@@ -1119,6 +1270,17 @@ class DimAngularEntity(CADEntity):
         return DimAngularEntity(self._center, self._p1, self._p2,
                                 self._radius, self.layer,
                                 self.arrow_size, self.text_height)
+
+    def to_props_dict(self) -> dict:
+        return {
+            "type": "DimAngular",
+            "properties": {
+                **self._base_props(),
+                "arc_radius":      round(self._radius / GRID_UNIT, 3),
+                "arrow_size":      round(self.arrow_size, 3),
+                "dim_text_height": round(self.text_height, 3),
+            },
+        }
 
 
 class HatchEntity(CADEntity):
@@ -1250,6 +1412,16 @@ class HatchEntity(CADEntity):
         return HatchEntity(self._boundary, self._pattern, self._scale,
                            self._angle, self.layer)
 
+    def to_props_dict(self) -> dict:
+        return {
+            "type": "Hatch",
+            "properties": {
+                **self._base_props(),
+                "pattern":    self._pattern,
+                "hatch_scale": round(self._scale, 3),
+            },
+        }
+
 
 class SplineEntity(CADEntity):
     def __init__(self, control_points: list[QPointF], closed: bool = False,
@@ -1337,6 +1509,16 @@ class SplineEntity(CADEntity):
 
     def clone(self) -> "SplineEntity":
         return SplineEntity(self._control_points, self._closed, self.layer)
+
+    def to_props_dict(self) -> dict:
+        return {
+            "type": "Spline",
+            "properties": {
+                **self._base_props(),
+                "point_count": len(self._control_points),
+                "closed":      "Yes" if self._closed else "No",
+            },
+        }
 
 
 def _angle_in_span(angle: float, start: float, span: float) -> bool:
