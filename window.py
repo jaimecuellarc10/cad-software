@@ -1,3 +1,5 @@
+import os
+
 from PySide6.QtWidgets import (
     QMainWindow, QToolBar, QStatusBar, QLabel, QWidget, QVBoxLayout,
     QFileDialog, QMessageBox, QDockWidget,
@@ -219,6 +221,8 @@ class MainWindow(QMainWindow):
         self._point_tool     = PointTool()
 
         self._last_draw_tool: str | None = None
+        self._current_file:   str | None = None
+        self._save_idx:       int        = -1   # undo._idx at last save
 
         self.view._select_tool     = self._select_tool
         self.view._text_tool       = self._text_tool
@@ -356,6 +360,26 @@ class MainWindow(QMainWindow):
         # ── File ──────────────────────────────────────────────────────────────
         file_menu = mb.addMenu("File")
 
+        new_action = file_menu.addAction("New")
+        new_action.setShortcut("Ctrl+N")
+        new_action.triggered.connect(self._new_file)
+
+        open_action = file_menu.addAction("Open…")
+        open_action.setShortcut("Ctrl+O")
+        open_action.triggered.connect(self._open_file)
+
+        file_menu.addSeparator()
+
+        save_action = file_menu.addAction("Save")
+        save_action.setShortcut("Ctrl+S")
+        save_action.triggered.connect(self._save_file)
+
+        save_as_action = file_menu.addAction("Save As…")
+        save_as_action.setShortcut("Ctrl+Shift+S")
+        save_as_action.triggered.connect(self._save_as_file)
+
+        file_menu.addSeparator()
+
         export_dxf_action = file_menu.addAction("Export DXF…")
         export_dxf_action.setShortcut("Ctrl+Shift+D")
         export_dxf_action.triggered.connect(self._export_dxf)
@@ -401,6 +425,110 @@ class MainWindow(QMainWindow):
             QDockWidget.DockWidgetFeature.DockWidgetFloatable |
             QDockWidget.DockWidgetFeature.DockWidgetClosable)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._props_dock)
+
+    # ── File operations ───────────────────────────────────────────────────────
+
+    def _is_dirty(self) -> bool:
+        return self.undo_stack._idx != self._save_idx
+
+    def _confirm_save_if_needed(self) -> bool:
+        """Returns True if caller may proceed, False if user cancelled."""
+        if not self._is_dirty() and not self.scene.all_entities():
+            return True
+        if not self._is_dirty():
+            return True
+        reply = QMessageBox.question(
+            self, "Unsaved Changes",
+            "The drawing has unsaved changes. Save before continuing?",
+            QMessageBox.StandardButton.Save   |
+            QMessageBox.StandardButton.Discard |
+            QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if reply == QMessageBox.StandardButton.Save:
+            return self._save_file()
+        if reply == QMessageBox.StandardButton.Discard:
+            return True
+        return False  # Cancel
+
+    def _update_title(self):
+        if self._current_file:
+            self.setWindowTitle(f"CAD — {os.path.basename(self._current_file)}")
+        else:
+            self.setWindowTitle("CAD")
+
+    def _new_file(self):
+        if not self._confirm_save_if_needed():
+            return
+        self.scene.clear_all()
+        self.undo_stack._stack.clear()
+        self.undo_stack._idx = -1
+        self._current_file = None
+        self._save_idx      = -1
+        self._activate_tool("select")
+        self._update_title()
+
+    def _open_file(self):
+        if not self._confirm_save_if_needed():
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open CAD File", "", "CAD Files (*.cad);;All Files (*.*)"
+        )
+        if not path:
+            return
+        try:
+            from cad.file_io import load_file
+            load_file(self.scene, self.layer_manager, path)
+            self.undo_stack._stack.clear()
+            self.undo_stack._idx = -1
+            self._current_file = path
+            self._save_idx      = -1
+            self._activate_tool("select")
+            self._update_title()
+            self.view.zoom_extents()
+            self.status.showMessage(f"Opened: {path}", 5000)
+        except Exception as exc:
+            QMessageBox.critical(self, "Open failed", str(exc))
+
+    def _save_file(self) -> bool:
+        if not self._current_file:
+            return self._save_as_file()
+        try:
+            from cad.file_io import save_file
+            save_file(self.scene, self._current_file)
+            self._save_idx = self.undo_stack._idx
+            self._update_title()
+            self.status.showMessage(f"Saved: {self._current_file}", 5000)
+            return True
+        except Exception as exc:
+            QMessageBox.critical(self, "Save failed", str(exc))
+            return False
+
+    def _save_as_file(self) -> bool:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save CAD File", "", "CAD Files (*.cad);;All Files (*.*)"
+        )
+        if not path:
+            return False
+        if not path.lower().endswith(".cad"):
+            path += ".cad"
+        try:
+            from cad.file_io import save_file
+            save_file(self.scene, path)
+            self._current_file = path
+            self._save_idx     = self.undo_stack._idx
+            self._update_title()
+            self.status.showMessage(f"Saved: {path}", 5000)
+            return True
+        except Exception as exc:
+            QMessageBox.critical(self, "Save failed", str(exc))
+            return False
+
+    def closeEvent(self, event):
+        if self._confirm_save_if_needed():
+            event.accept()
+        else:
+            event.ignore()
 
     # ── Export ────────────────────────────────────────────────────────────────
 

@@ -38,3 +38,8 @@ class CADScene(QGraphicsScene):
         for e in self._entities:
             if e.intersects_rect(rect, crossing):
                 e.selected = True
+
+    def clear_all(self):
+        for e in list(self._entities):
+            self.removeItem(e)
+        self._entities.clear()
