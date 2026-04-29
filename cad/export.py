@@ -11,6 +11,8 @@ except ImportError:
     HAS_EZDXF = False
 
 from .constants import GRID_UNIT
+from PySide6.QtCore import QPointF
+
 from .entities import (
     LineEntity, PolylineEntity, CircleEntity, ArcEntity, EllipseEntity,
     XLineEntity, TextEntity, DimLinearEntity, DimAngularEntity,
@@ -19,12 +21,18 @@ from .entities import (
 
 
 # ── Coordinate helpers ────────────────────────────────────────────────────────
-# Scene uses Y-down (Qt); DXF uses Y-up.  Divide by GRID_UNIT to get drawing units.
+# Scene uses Y-down (Qt); DXF uses Y-up.  Divide/multiply by GRID_UNIT for units.
 
+# export: scene → DXF
 def _sx(x: float) -> float: return x / GRID_UNIT
 def _sy(y: float) -> float: return -y / GRID_UNIT
 def _p2(pt) -> tuple: return (_sx(pt.x()), _sy(pt.y()))
 def _p3(pt) -> tuple: return (_sx(pt.x()), _sy(pt.y()), 0.0)
+
+# import: DXF → scene
+def _ix(x: float) -> float: return x * GRID_UNIT
+def _iy(y: float) -> float: return -y * GRID_UNIT
+def _ip(v) -> QPointF:      return QPointF(_ix(v.x), _iy(v.y))
 
 
 def _arc_angles(start: float, span: float) -> tuple[float, float]:
@@ -124,6 +132,125 @@ def export_dxf(scene, path: str) -> None:
             msp.add_line(_p3(ent._center), _p3(ent._p2), dxfattribs=att)
 
     doc.saveas(path)
+
+
+# ── DXF import ────────────────────────────────────────────────────────────────
+
+def _import_entity(dxf_ent, layer):
+    """Convert one ezdxf entity to a CAD entity. Returns None if unsupported."""
+    t = dxf_ent.dxftype()
+
+    if t == "LINE":
+        return LineEntity(_ip(dxf_ent.dxf.start), _ip(dxf_ent.dxf.end), layer)
+
+    if t == "LWPOLYLINE":
+        pts = [QPointF(_ix(x), _iy(y)) for x, y, *_ in dxf_ent.get_points()]
+        if len(pts) >= 2:
+            closed = bool(dxf_ent.closed)
+            if closed and pts[0] != pts[-1]:
+                pts.append(pts[0])
+            return PolylineEntity(pts, layer)
+
+    if t == "POLYLINE" and dxf_ent.is_2d_polyline:
+        pts = [QPointF(_ix(v.dxf.location.x), _iy(v.dxf.location.y))
+               for v in dxf_ent.vertices]
+        if len(pts) >= 2:
+            return PolylineEntity(pts, layer)
+
+    if t == "CIRCLE":
+        c = dxf_ent.dxf.center
+        return CircleEntity(QPointF(_ix(c.x), _iy(c.y)),
+                            _ix(dxf_ent.dxf.radius), layer)
+
+    if t == "ARC":
+        c     = dxf_ent.dxf.center
+        start = dxf_ent.dxf.start_angle
+        end   = dxf_ent.dxf.end_angle
+        span  = (end - start) % 360
+        return ArcEntity(QPointF(_ix(c.x), _iy(c.y)),
+                         _ix(dxf_ent.dxf.radius), start, span, layer)
+
+    if t == "ELLIPSE":
+        c     = dxf_ent.dxf.center
+        major = dxf_ent.dxf.major_axis   # Vec3
+        rx    = math.hypot(major.x, major.y) * GRID_UNIT
+        ry    = rx * dxf_ent.dxf.ratio
+        angle = math.degrees(math.atan2(major.y, major.x))
+        return EllipseEntity(QPointF(_ix(c.x), _iy(c.y)), rx, ry, angle, layer)
+
+    if t == "XLINE":
+        pt = dxf_ent.dxf.start
+        uv = dxf_ent.dxf.unit_vector
+        angle = math.degrees(math.atan2(uv.y, uv.x))
+        return XLineEntity(QPointF(_ix(pt.x), _iy(pt.y)), angle, layer)
+
+    if t == "POINT":
+        loc = dxf_ent.dxf.location
+        return PointEntity(QPointF(_ix(loc.x), _iy(loc.y)), layer)
+
+    if t == "TEXT":
+        ins    = dxf_ent.dxf.insert
+        text   = dxf_ent.dxf.text
+        height = getattr(dxf_ent.dxf, "height", 2.5)
+        rot    = getattr(dxf_ent.dxf, "rotation", 0.0)
+        return TextEntity(QPointF(_ix(ins.x), _iy(ins.y)), text, height, rot, layer)
+
+    if t == "MTEXT":
+        ins    = dxf_ent.dxf.insert
+        text   = dxf_ent.plain_mtext()
+        height = getattr(dxf_ent.dxf, "char_height", 2.5)
+        rot    = getattr(dxf_ent.dxf, "rotation", 0.0)
+        return TextEntity(QPointF(_ix(ins.x), _iy(ins.y)), text, height, rot, layer)
+
+    if t == "SPLINE":
+        ctrl = list(dxf_ent.control_points)
+        if len(ctrl) >= 2:
+            pts = [QPointF(_ix(p.x), _iy(p.y)) for p in ctrl]
+            return SplineEntity(pts, layer=layer)
+
+    if t == "HATCH":
+        for path in dxf_ent.paths:
+            # PolylinePath has .vertices; EdgePath has .edges
+            vertices = getattr(path, "vertices", None)
+            if vertices:
+                pts = [QPointF(_ix(v[0]), _iy(v[1])) for v in vertices]
+                if len(pts) >= 3:
+                    pattern = getattr(dxf_ent.dxf, "pattern_name", "ANSI31") or "ANSI31"
+                    return HatchEntity(pts, pattern=pattern, layer=layer)
+            edges = getattr(path, "edges", None)
+            if edges:
+                pts = []
+                for edge in edges:
+                    start = getattr(edge, "start", None)
+                    if start is not None:
+                        pts.append(QPointF(_ix(start.x), _iy(start.y)))
+                if len(pts) >= 3:
+                    return HatchEntity(pts, layer=layer)
+
+    return None  # unsupported entity type — silently skip
+
+
+def import_dxf(scene, layer_manager, path: str) -> int:
+    """
+    Merge all supported entities from a DXF file into scene.
+    Returns the number of entities successfully imported.
+    """
+    if not HAS_EZDXF:
+        raise RuntimeError("ezdxf is not installed — run: pip install ezdxf")
+
+    doc = ezdxf.readfile(path)
+    msp = doc.modelspace()
+    count = 0
+
+    for dxf_ent in msp:
+        layer_name = dxf_ent.dxf.layer if dxf_ent.dxf.hasattr("layer") else "0"
+        layer = layer_manager.get(layer_name) or layer_manager.current
+        ent = _import_entity(dxf_ent, layer)
+        if ent is not None:
+            scene.add_entity(ent)
+            count += 1
+
+    return count
 
 
 # ── PDF export ────────────────────────────────────────────────────────────────

@@ -380,6 +380,11 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
+        import_dxf_action = file_menu.addAction("Import DXF…")
+        import_dxf_action.triggered.connect(self._import_dxf)
+
+        file_menu.addSeparator()
+
         export_dxf_action = file_menu.addAction("Export DXF…")
         export_dxf_action.setShortcut("Ctrl+Shift+D")
         export_dxf_action.triggered.connect(self._export_dxf)
@@ -531,6 +536,24 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     # ── Export ────────────────────────────────────────────────────────────────
+
+    def _import_dxf(self):
+        if not HAS_EZDXF:
+            QMessageBox.critical(self, "Missing dependency",
+                                 "ezdxf is not installed.\n\nRun:  pip install ezdxf")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import DXF", "", "DXF Files (*.dxf);;All Files (*.*)"
+        )
+        if not path:
+            return
+        try:
+            from cad.export import import_dxf
+            count = import_dxf(self.scene, self.layer_manager, path)
+            self.view.zoom_extents()
+            self.status.showMessage(f"Imported {count} entities from {path}", 5000)
+        except Exception as exc:
+            QMessageBox.critical(self, "Import failed", str(exc))
 
     def _export_dxf(self):
         if not HAS_EZDXF:
