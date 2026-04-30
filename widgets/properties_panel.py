@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from theme import Colors, Metrics
 from .property_editors import (
-    VARIES, ChoiceEditor, ColorEditor, NumericEditor, ReadOnlyEditor, StringEditor,
+    VARIES, ChoiceEditor, ColorEditor, FontEditor, NumericEditor, ReadOnlyEditor, StringEditor,
 )
 
 
@@ -266,6 +266,10 @@ class PropertiesPanel(QWidget):
                 ed = NumericEditor(props["text_height"])
                 ed.valueChanged.connect(lambda v: self.propertyChanged.emit("text_height", v))
                 text_grp.add_row("Height", ed)
+            if "font_family" in props:
+                ed = FontEditor(props["font_family"] if props["font_family"] is not VARIES else "Arial")
+                ed.valueChanged.connect(lambda v: self.propertyChanged.emit("font_family", v))
+                text_grp.add_row("Font", ed)
             self.categories_layout.insertWidget(idx, text_grp)
             idx += 1
 

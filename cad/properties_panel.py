@@ -190,6 +190,10 @@ class PropertiesPanel(QWidget):
             e.prepareGeometryChange()
             e._height = float(val)
             e.update()
+        elif prop == "font_family" and isinstance(e, TextEntity):
+            e.prepareGeometryChange()
+            e._font_family = str(val)
+            e.update()
 
         # ── Hatch ─────────────────────────────────────────────────────────────
         elif prop == "pattern" and isinstance(e, HatchEntity):

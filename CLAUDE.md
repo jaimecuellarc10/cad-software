@@ -2,29 +2,38 @@
 
 ## Overview
 
-A desktop 2D CAD application targeting AutoCAD LT workflow parity, built with **Python 3.13 + PySide6 6.11**. Runs on macOS and Windows. No build system — launch directly with `python3 main.py`.
+A desktop 2D CAD application targeting AutoCAD LT workflow parity, built with **Python 3.13 + PySide6 6.11**. Runs on Windows. No build system — launch directly via `run.bat` or the full Python path.
 
 ## Running
 
 ```bash
-cd "/Users/jaimecuellar/Documents/ClaudeCode/Cad Software"
-python3 main.py
+# Windows (Python not on PATH — use full path)
+C:\Users\Setup-PC1\AppData\Local\Programs\Python\Python313\python.exe main.py
+
+# Or use the batch file
+run.bat
 ```
 
 ## Package Layout
 
 ```
-main.py              — entry point (QApplication + MainWindow)
-window.py            — MainWindow: toolbar, snap bar, menu, command routing
+main.py              — entry point (QApplication + MainWindow, applies dark theme)
+window.py            — MainWindow: toolbar, snap bar, menu, file ops, command routing
+theme.py             — AutoCAD-style dark QSS theme (apply_theme, Colors, Metrics)
+icons.py             — SVG/icon helpers
+run.bat              — launch script
 cad/
-  constants.py       — GRID_UNIT, SNAP_PX, GRIP_PX, SnapMode enum
-  entities.py        — All CAD entity classes + geometry helpers
+  constants.py       — GRID_UNIT=10, SNAP_PX, GRIP_PX, SnapMode enum
+  entities.py        — All CAD entity classes + geometry helpers + to_props_dict()
   layers.py          — LayerManager, Layer (default color: white #ffffff)
   scene.py           — CADScene(QGraphicsScene): entity list + selection
   view.py            — CADView(QGraphicsView): grid, overlays, input routing
   snap.py            — SnapManager: endpoint/midpoint/center/intersection snap
   undo.py            — UndoStack + all Command subclasses
   command_bar.py     — Read-only command bar widget (no QLineEdit)
+  export.py          — DXF export + DXF import (ezdxf) + PDF export
+  file_io.py         — Native .cad JSON format: save_file / load_file
+  properties_panel.py — Adapter wrapping widgets.PropertiesPanel; polls scene 120ms
   tools/
     base.py          — BaseTool abstract state machine
     select.py        — SelectTool: click + window/crossing selection
@@ -51,12 +60,18 @@ cad/
     join_tool.py     — JoinTool (J): chain lines/polylines into one polyline
     array.py         — ArrayTool (AR): rectangular (rows,cols,dx,dy) or polar (count,angle)
     stretch.py       — StretchTool (S): crossing box → base pt → dest, type distance
-    text_tool.py     — TextTool (T): click insertion point, type text in command bar
+    text_tool.py     — TextTool (T): inline text box, blinking cursor, font support
     dimension.py     — DimLinearTool (DIM), DimAngularTool (DAN)
     hatch.py         — HatchTool (H): click inside closed region, auto-detect boundary
     spline.py        — SplineTool (SPL): Catmull-Rom spline, C=close
     lengthen.py      — LengthenTool (LEN): type delta, click near endpoint to extend/shorten
     _ghost.py        — Ghost preview helpers (GHOST_PEN, draw_entities_ghost_*)
+widgets/
+  __init__.py
+  property_editors.py — NumericEditor, StringEditor, ColorEditor, ChoiceEditor,
+                        ReadOnlyEditor, FontEditor (QFontComboBox wrapper)
+  properties_panel.py — PropertiesPanel widget: collapsible categories, set_selection(),
+                        propertyChanged signal; used via cad/properties_panel.py adapter
 ```
 
 ## Architecture
@@ -70,10 +85,13 @@ All entities subclass `CADEntity(QGraphicsItem)`. Every entity must implement:
 - `intersects_rect(rect, crossing)` — window/crossing selection test
 - `translate(dx, dy)` / `rotate_about(cx, cy, angle_deg)` / `mirror_across(ax, ay, bx, by)` / `scale_about(cx, cy, factor)` — in-place transforms, each calls `prepareGeometryChange()` then `update()`
 - `clone()` — deep copy, unselected, not in any scene
+- `to_props_dict()` — returns `{'type': str, 'properties': dict}` for the properties panel
 
-Entity classes: `LineEntity`, `PolylineEntity`, `CircleEntity`, `ArcEntity`, `EllipseEntity`, `XLineEntity`, `TextEntity`, `DimLinearEntity`, `DimAngularEntity`, `HatchEntity`, `SplineEntity`.
+Entity classes: `LineEntity`, `PolylineEntity`, `CircleEntity`, `ArcEntity`, `EllipseEntity`, `XLineEntity`, `TextEntity`, `DimLinearEntity`, `DimAngularEntity`, `HatchEntity`, `SplineEntity`, `PointEntity`.
 
 **Default layer color is white (`#ffffff`).** Orange (`255, 165, 0`) is the selection highlight.
+
+**`TextEntity`** has a `font_family: str` attribute (default `"Arial"`). Serialized in `.cad` files; backward-compatible (missing → Arial).
 
 Angle convention in `ArcEntity`: `_start_angle` and `_span_angle` are stored in degrees, CCW-positive from 3-o'clock (standard math convention with Y-negated for Qt).
 
@@ -88,12 +106,13 @@ ny = cy - dx * sin_a + dy * cos_a
 Tools are stateless-between-activations singletons created once in `MainWindow` and reused. Key lifecycle:
 - `activate(view)` — called by `CADView.set_tool()`; grabs scene state (e.g., selected entities for editing tools)
 - `deactivate()` — calls `cancel()`, clears state, sets `self.view = None`
-- `on_press / on_move / on_release / on_key` — input handlers
+- `on_press(snapped, event)` / `on_move(snapped, raw, event)` / `on_release(snapped, event)` / `on_key(event)` — input handlers
 - `cancel()` — abort current op, reset state
 - `finish()` — commit current op (default = `cancel()`; PolylineTool overrides to commit)
 - `draw_overlay(painter)` — viewport-space preview drawing
 - `snap_extras()` — extra snap targets from in-progress geometry
 - `on_command(cmd) -> bool` — called by window before global command lookup; return True to consume
+- `wants_raw_keys() -> bool` — if True, ALL key events bypass the command bar and go directly to `on_key()`; used by TextTool while typing
 
 **In-tool selection** (Move, Copy, Rotate, Mirror, Scale): if no entities pre-selected, tool enters `STATE_SELECT` with blue/green box drag (left→right = window, right→left = crossing) and click-to-select. Space/Enter confirms selection.
 
@@ -103,6 +122,18 @@ Tools are stateless-between-activations singletons created once in `MainWindow` 
 
 **Precision input**: drawing tools (Line, Polyline, Circle, Rectangle, Move, Copy, Rotate, Scale, Stretch) accept typed values via the command bar — type a number and press Enter to commit at that exact distance/angle/factor in the current direction.
 
+### Text Tool (`cad/tools/text_tool.py`)
+
+Word-processor-style inline editing:
+- Click to place → blue dashed text box appears with blinking cursor
+- Full keyboard: lowercase, uppercase, Space inserts space, Left/Right/Home/End move cursor, Backspace/Delete work correctly
+- Enter commits text → auto-exits to select tool
+- Escape cancels → auto-exits to select tool
+- Click outside box → commits text → auto-exits to select tool
+- Drag bottom-right triangle grip to resize the box width
+- Double-click existing TextEntity → enters edit mode with pre-filled buffer; commit/cancel returns to select
+- `wants_raw_keys()` returns True while typing, bypassing command bar entirely
+
 ### Undo System (`cad/undo.py`)
 
 Command pattern. `UndoStack.push(cmd)` calls `cmd.execute()` immediately. Commands:
@@ -111,7 +142,7 @@ Command pattern. `UndoStack.push(cmd)` calls `cmd.execute()` immediately. Comman
 - `CopyEntitiesCommand(scene, entities, dx, dy)` — creates clones on first execute
 - `RotateEntitiesCommand(entities, cx, cy, angle_deg)`
 - `MirrorEntitiesCommand(scene, entities, ax, ay, bx, by, keep_original)`
-- `ReplaceEntityCommand(scene, old, new)` — used by Trim/Extend/Lengthen
+- `ReplaceEntityCommand(scene, old, new)` — used by Trim/Extend/Lengthen/Text edit
 - `SplitEntityCommand(scene, old, new1, new2)` — used by Trim (between two intersections)
 - `ScaleEntitiesCommand(entities, cx, cy, factor)`
 - `FilletCommand(scene, line1, line2, arc, new_l1, new_l2)` — atomic replace + add
@@ -122,6 +153,8 @@ Command pattern. `UndoStack.push(cmd)` calls `cmd.execute()` immediately. Comman
 - `JoinCommand(scene, originals, result)`
 - `StretchCommand(scene, old_new_pairs)`
 
+Dirty tracking: `window._save_idx` stores `undo_stack._idx` at last save; compare to detect unsaved changes.
+
 ### View (`cad/view.py`)
 
 Key behaviors:
@@ -131,8 +164,27 @@ Key behaviors:
 - **Delete / Backspace**: deletes selected entities when command bar has no input
 - **Ctrl+C / Ctrl+V**: in-memory clipboard; paste offsets by 20 scene units, cascades on repeated pastes
 - **ZE / EXTENTS / ZOOM**: `zoom_extents()` — fits all entities in view
-- Key routing: printable chars → `_command_bar.feed_char()`; Enter/Space/Tab → submit command bar
+- Key routing: if active tool returns `wants_raw_keys() == True`, ALL keys go to `tool.on_key()` with `_auto_exit` called after; otherwise printable chars → `_command_bar.feed_char()`
 - Zoom clamped to [0.01, 500] scale to prevent crash
+- `_auto_exit(was_idle, undo_before)` — switches to select when tool transitions active→idle or always-idle tool places an entity
+
+### Properties Panel (`cad/properties_panel.py` + `widgets/properties_panel.py`)
+
+Two-layer architecture:
+- `widgets/properties_panel.py` — pure UI: `PropertiesPanel.set_selection(list[dict])`, emits `propertyChanged(prop_name, value)`
+- `cad/properties_panel.py` — adapter: polls `scene.selected_entities()` every 120ms, calls `to_props_dict()`, feeds to widget, routes `propertyChanged` back to entity attributes via `_apply_one()`
+
+Properties are grouped in collapsible CategoryGroups: General, Geometry, Text, Hatch, Dimension. The Text category includes Content (StringEditor), Height (NumericEditor), Font (FontEditor / QFontComboBox).
+
+### File I/O
+
+**Native format** (`.cad`): JSON via `cad/file_io.py`. `save_file(scene, path)` / `load_file(scene, layer_manager, path)`. FILE_VERSION = 1. All entity types serialized including font_family for TextEntity (backward-compatible default "Arial").
+
+**DXF**: export + import via `cad/export.py` using `ezdxf`. Coordinate convention: scene Y-down ↔ DXF Y-up via `_sy = -y/GRID_UNIT`. Import reverses with `_iy = -y * GRID_UNIT`. Supports LINE, LWPOLYLINE, CIRCLE, ARC, ELLIPSE, XLINE, POINT, TEXT, MTEXT, SPLINE, HATCH.
+
+**PDF**: export via `cad/export.py` using `QPdfWriter`. Overrides all entity colors to black for white-paper output.
+
+**File menu**: New (Ctrl+N), Open (Ctrl+O), Save (Ctrl+S), Save As (Ctrl+Shift+S), Import DXF, Export DXF (Ctrl+Shift+D), Export PDF (Ctrl+Shift+P). Unsaved-changes prompt on New/Open/Close.
 
 ### Snap System (`cad/snap.py`)
 
@@ -148,6 +200,8 @@ if itype == QLineF.IntersectionType.BoundedIntersection:
 ### Command Bar (`cad/command_bar.py`)
 
 Read-only display widget. The view routes keypresses to it — no QLineEdit focus stealing. Buffer is uppercase. `submit()` emits `submitted(str)`, then clears buffer and refocuses the view. `add_history(text)` updates the history label.
+
+Note: when `wants_raw_keys()` is True on the active tool, the command bar receives NO input at all.
 
 ## AutoCAD Commands
 
@@ -192,11 +246,13 @@ Read-only display widget. The view routes keypresses to it — no QLineEdit focu
 - Rotate: positive angle = **CCW on screen**; type angle in command bar after picking base point
 - Mirror: type `Y` + Enter to keep original (mirror-copy mode)
 - Precision input: type a value + Enter at any point during drawing/editing to commit at exact distance
+- Text tool: Enter commits and returns to select; Escape cancels and returns to select; Space inserts a space character (does NOT submit)
 
 ## Known Limitations / Future Work
 
 - Trim/Extend only operate on `LineEntity` and `PolylineEntity` (not circles or arcs yet)
-- No DXF import/export yet
 - No layers UI (layer 0 is the only layer; color defaults to white)
 - No radius/diameter dimension tools yet
 - Hatch boundary detection uses graph walk — complex overlapping geometry may not resolve
+- Text tool does not support click-drag text selection within the editing box
+- Text tool does not support multiline text (Enter commits; no newline insertion)

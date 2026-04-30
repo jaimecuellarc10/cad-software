@@ -14,7 +14,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QColorDialog, QComboBox, QHBoxLayout, QLineEdit,
+    QColorDialog, QComboBox, QFontComboBox, QHBoxLayout, QLineEdit,
     QPushButton, QWidget,
 )
 
@@ -170,3 +170,21 @@ class ReadOnlyEditor(QLineEdit):
 
     def setValue(self, v):
         self.setText("*VARIES*" if v is VARIES else str(v))
+
+
+# ---------------------------------------------------------------------------
+# Font editor — system font picker
+# ---------------------------------------------------------------------------
+class FontEditor(QFontComboBox):
+    valueChanged = Signal(object)  # str: font family name
+
+    def __init__(self, value: str = "Arial", parent=None):
+        super().__init__(parent)
+        self.setValue(value)
+        self.currentFontChanged.connect(lambda f: self.valueChanged.emit(f.family()))
+
+    def setValue(self, v):
+        if v is VARIES:
+            self.setCurrentText("Arial")
+        else:
+            self.setCurrentText(str(v))

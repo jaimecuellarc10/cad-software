@@ -896,12 +896,14 @@ class XLineEntity(CADEntity):
 
 class TextEntity(CADEntity):
     def __init__(self, pos: QPointF, text: str, height: float = 2.5,
-                 angle_deg: float = 0.0, layer: "Layer" | None = None):
+                 angle_deg: float = 0.0, layer: "Layer" | None = None,
+                 font_family: str = "Arial"):
         super().__init__(layer or Layer("0"))
         self._pos = QPointF(pos)
         self._text = text
         self._height = float(height)
         self._angle_deg = float(angle_deg)
+        self._font_family = font_family
 
     @property
     def pos(self) -> QPointF: return QPointF(self._pos)
@@ -911,6 +913,8 @@ class TextEntity(CADEntity):
     def height(self) -> float: return self._height
     @property
     def angle_deg(self) -> float: return self._angle_deg
+    @property
+    def font_family(self) -> str: return self._font_family
 
     def _local_rect(self) -> QRectF:
         scene_h = self._height * GRID_UNIT
@@ -937,7 +941,7 @@ class TextEntity(CADEntity):
         painter.save()
         painter.translate(self._pos)
         painter.rotate(-self._angle_deg)
-        painter.setFont(QFont("Arial", max(1, int(self._height * GRID_UNIT))))
+        painter.setFont(QFont(self._font_family, max(1, int(self._height * GRID_UNIT))))
         painter.setPen(QPen(QColor(255, 165, 0) if self._selected else QColor("#ffffff"), 0))
         painter.drawText(0, 0, self._text)
         painter.restore()
@@ -991,7 +995,7 @@ class TextEntity(CADEntity):
 
     def clone(self) -> "TextEntity":
         return TextEntity(QPointF(self._pos), self._text, self._height,
-                          self._angle_deg, self.layer)
+                          self._angle_deg, self.layer, self._font_family)
 
     def to_props_dict(self) -> dict:
         return {
@@ -1003,6 +1007,7 @@ class TextEntity(CADEntity):
                 "text_content": self._text,
                 "text_height":  round(self._height, 3),
                 "rotation":     round(self._angle_deg, 3),
+                "font_family":  self._font_family,
             },
         }
 

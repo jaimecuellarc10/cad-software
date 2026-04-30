@@ -93,7 +93,8 @@ def _serialize(e) -> dict | None:
     if isinstance(e, TextEntity):
         return {**base, "type": "Text",
                 "pos": _pt(e._pos), "text": e._text,
-                "height": e._height, "angle_deg": e._angle_deg}
+                "height": e._height, "angle_deg": e._angle_deg,
+                "font_family": e._font_family}
 
     if isinstance(e, DimLinearEntity):
         return {**base, "type": "DimLinear",
@@ -155,7 +156,8 @@ def _deserialize(data: dict, layer: Layer):
 
     elif t == "Text":
         e = TextEntity(_qpt(data["pos"]), data["text"],
-                       data.get("height", 2.5), data.get("angle_deg", 0.0), layer)
+                       data.get("height", 2.5), data.get("angle_deg", 0.0), layer,
+                       data.get("font_family", "Arial"))
 
     elif t == "DimLinear":
         e = DimLinearEntity(_qpt(data["p1"]), _qpt(data["p2"]),

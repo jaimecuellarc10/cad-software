@@ -320,6 +320,16 @@ class CADView(QGraphicsView):
     # ── Keyboard ─────────────────────────────────────────────────────────────
 
     def keyPressEvent(self, event: QKeyEvent):
+        if (self.current_tool is not None and
+                getattr(self.current_tool, 'wants_raw_keys', lambda: False)()):
+            was_idle    = getattr(self.current_tool, 'is_idle', True)
+            undo_before = self.undo_stack._idx
+            self.current_tool.on_key(event)
+            self._update_prompt()
+            self.viewport().update()
+            self._auto_exit(was_idle, undo_before)
+            return
+
         key  = event.key()
         mods = event.modifiers()
         text = event.text()
