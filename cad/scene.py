@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import QGraphicsScene
 from PySide6.QtCore import QRectF
 from .entities import CADEntity
+from .constants import DrawingUnit
 
 
 class CADScene(QGraphicsScene):
@@ -8,6 +9,7 @@ class CADScene(QGraphicsScene):
         super().__init__()
         self.setSceneRect(-50000, -50000, 100000, 100000)
         self._entities: list[CADEntity] = []
+        self.drawing_unit: DrawingUnit = DrawingUnit.MM
 
     # ── Entity management ─────────────────────────────────────────────────────
 

@@ -29,10 +29,34 @@ def _sy(y: float) -> float: return -y / GRID_UNIT
 def _p2(pt) -> tuple: return (_sx(pt.x()), _sy(pt.y()))
 def _p3(pt) -> tuple: return (_sx(pt.x()), _sy(pt.y()), 0.0)
 
-# import: DXF → scene
-def _ix(x: float) -> float: return x * GRID_UNIT
-def _iy(y: float) -> float: return -y * GRID_UNIT
-def _ip(v) -> QPointF:      return QPointF(_ix(v.x), _iy(v.y))
+# import: DXF → scene  (unit_scale computed per-file from $INSUNITS)
+# 1 scene unit = 1 mm;  GRID_UNIT used as fallback for unitless files
+_INSUNITS_TO_MM: dict[int, float] = {
+    1: 25.4,    # inches
+    2: 304.8,   # feet
+    3: 1609344, # miles (unlikely but complete)
+    4: 1.0,     # millimeters
+    5: 10.0,    # centimeters
+    6: 1000.0,  # meters
+    7: 1e6,     # kilometers
+    8: 0.0254,  # microinches
+    9: 0.001,   # mils
+    10: 914.4,  # yards
+    11: 1e-7,   # angstroms
+    12: 1e-6,   # nanometers
+    13: 1e-3,   # microns
+    14: 100.0,  # decimeters
+    15: 10000.0,# dekameters
+    16: 100000.0,# hectometers
+    17: 1e9,    # gigameters
+    18: 1.496e14,# astronomical units
+    19: 9.461e18,# light years
+    20: 3.086e19,# parsecs
+}
+
+def _ix(x: float, us: float = GRID_UNIT) -> float: return  x * us
+def _iy(y: float, us: float = GRID_UNIT) -> float: return -y * us
+def _ip(v, us: float = GRID_UNIT) -> QPointF: return QPointF(v.x * us, -v.y * us)
 
 
 def _arc_angles(start: float, span: float) -> tuple[float, float]:
@@ -53,6 +77,7 @@ def export_dxf(scene, path: str) -> None:
         raise RuntimeError("ezdxf is not installed — run: pip install ezdxf")
 
     doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = scene.drawing_unit.insunits
     msp = doc.modelspace()
 
     for ent in scene.all_entities():
@@ -136,15 +161,19 @@ def export_dxf(scene, path: str) -> None:
 
 # ── DXF import ────────────────────────────────────────────────────────────────
 
-def _import_entity(dxf_ent, layer):
-    """Convert one ezdxf entity to a CAD entity. Returns None if unsupported."""
+def _import_entity(dxf_ent, layer, us: float):
+    """Convert one ezdxf entity to a CAD entity. us = scene units per DXF unit."""
+    def ix(x): return  x * us
+    def iy(y): return -y * us
+    def ip(v):  return QPointF(v.x * us, -v.y * us)
+
     t = dxf_ent.dxftype()
 
     if t == "LINE":
-        return LineEntity(_ip(dxf_ent.dxf.start), _ip(dxf_ent.dxf.end), layer)
+        return LineEntity(ip(dxf_ent.dxf.start), ip(dxf_ent.dxf.end), layer)
 
     if t == "LWPOLYLINE":
-        pts = [QPointF(_ix(x), _iy(y)) for x, y, *_ in dxf_ent.get_points()]
+        pts = [QPointF(ix(x), iy(y)) for x, y, *_ in dxf_ent.get_points()]
         if len(pts) >= 2:
             closed = bool(dxf_ent.closed)
             if closed and pts[0] != pts[-1]:
@@ -152,68 +181,73 @@ def _import_entity(dxf_ent, layer):
             return PolylineEntity(pts, layer)
 
     if t == "POLYLINE" and dxf_ent.is_2d_polyline:
-        pts = [QPointF(_ix(v.dxf.location.x), _iy(v.dxf.location.y))
+        pts = [QPointF(ix(v.dxf.location.x), iy(v.dxf.location.y))
                for v in dxf_ent.vertices]
         if len(pts) >= 2:
             return PolylineEntity(pts, layer)
 
     if t == "CIRCLE":
         c = dxf_ent.dxf.center
-        return CircleEntity(QPointF(_ix(c.x), _iy(c.y)),
-                            _ix(dxf_ent.dxf.radius), layer)
+        return CircleEntity(QPointF(ix(c.x), iy(c.y)), ix(dxf_ent.dxf.radius), layer)
 
     if t == "ARC":
         c     = dxf_ent.dxf.center
         start = dxf_ent.dxf.start_angle
         end   = dxf_ent.dxf.end_angle
         span  = (end - start) % 360
-        return ArcEntity(QPointF(_ix(c.x), _iy(c.y)),
-                         _ix(dxf_ent.dxf.radius), start, span, layer)
+        return ArcEntity(QPointF(ix(c.x), iy(c.y)), ix(dxf_ent.dxf.radius),
+                         start, span, layer)
 
     if t == "ELLIPSE":
         c     = dxf_ent.dxf.center
-        major = dxf_ent.dxf.major_axis   # Vec3
-        rx    = math.hypot(major.x, major.y) * GRID_UNIT
+        major = dxf_ent.dxf.major_axis
+        rx    = math.hypot(major.x, major.y) * us
         ry    = rx * dxf_ent.dxf.ratio
         angle = math.degrees(math.atan2(major.y, major.x))
-        return EllipseEntity(QPointF(_ix(c.x), _iy(c.y)), rx, ry, angle, layer)
+        return EllipseEntity(QPointF(ix(c.x), iy(c.y)), rx, ry, angle, layer)
 
     if t == "XLINE":
         pt = dxf_ent.dxf.start
         uv = dxf_ent.dxf.unit_vector
         angle = math.degrees(math.atan2(uv.y, uv.x))
-        return XLineEntity(QPointF(_ix(pt.x), _iy(pt.y)), angle, layer)
+        return XLineEntity(QPointF(ix(pt.x), iy(pt.y)), angle, layer)
 
     if t == "POINT":
         loc = dxf_ent.dxf.location
-        return PointEntity(QPointF(_ix(loc.x), _iy(loc.y)), layer)
+        return PointEntity(QPointF(ix(loc.x), iy(loc.y)), layer)
 
     if t == "TEXT":
         ins    = dxf_ent.dxf.insert
         text   = dxf_ent.dxf.text
-        height = getattr(dxf_ent.dxf, "height", 2.5)
+        height = getattr(dxf_ent.dxf, "height", 2.5) * us
         rot    = getattr(dxf_ent.dxf, "rotation", 0.0)
-        return TextEntity(QPointF(_ix(ins.x), _iy(ins.y)), text, height, rot, layer)
+        return TextEntity(QPointF(ix(ins.x), iy(ins.y)), text, height, rot, layer)
 
     if t == "MTEXT":
-        ins    = dxf_ent.dxf.insert
-        text   = dxf_ent.plain_mtext()
-        height = getattr(dxf_ent.dxf, "char_height", 2.5)
+        if not dxf_ent.dxf.hasattr("insert"):
+            return None
+        ins = dxf_ent.dxf.insert
+        try:
+            text = dxf_ent.plain_mtext()
+        except AttributeError:
+            raw = getattr(dxf_ent, "text", "") or getattr(dxf_ent.dxf, "text", "")
+            import re
+            text = re.sub(r"\\[A-Za-z][^;]*;|[{}]", "", raw)
+        height = getattr(dxf_ent.dxf, "char_height", 2.5) * us
         rot    = getattr(dxf_ent.dxf, "rotation", 0.0)
-        return TextEntity(QPointF(_ix(ins.x), _iy(ins.y)), text, height, rot, layer)
+        return TextEntity(QPointF(ix(ins.x), iy(ins.y)), text, height, rot, layer)
 
     if t == "SPLINE":
         ctrl = list(dxf_ent.control_points)
         if len(ctrl) >= 2:
-            pts = [QPointF(_ix(p.x), _iy(p.y)) for p in ctrl]
+            pts = [QPointF(ix(p.x), iy(p.y)) for p in ctrl]
             return SplineEntity(pts, layer=layer)
 
     if t == "HATCH":
         for path in dxf_ent.paths:
-            # PolylinePath has .vertices; EdgePath has .edges
             vertices = getattr(path, "vertices", None)
             if vertices:
-                pts = [QPointF(_ix(v[0]), _iy(v[1])) for v in vertices]
+                pts = [QPointF(ix(v[0]), iy(v[1])) for v in vertices]
                 if len(pts) >= 3:
                     pattern = getattr(dxf_ent.dxf, "pattern_name", "ANSI31") or "ANSI31"
                     return HatchEntity(pts, pattern=pattern, layer=layer)
@@ -223,11 +257,11 @@ def _import_entity(dxf_ent, layer):
                 for edge in edges:
                     start = getattr(edge, "start", None)
                     if start is not None:
-                        pts.append(QPointF(_ix(start.x), _iy(start.y)))
+                        pts.append(QPointF(ix(start.x), iy(start.y)))
                 if len(pts) >= 3:
                     return HatchEntity(pts, layer=layer)
 
-    return None  # unsupported entity type — silently skip
+    return None
 
 
 def import_dxf(scene, layer_manager, path: str) -> int:
@@ -239,16 +273,31 @@ def import_dxf(scene, layer_manager, path: str) -> int:
         raise RuntimeError("ezdxf is not installed — run: pip install ezdxf")
 
     doc = ezdxf.readfile(path)
+    insunits = doc.header.get("$INSUNITS", 0)
+
+    # Inherit drawing unit from the file if it declares one
+    from .constants import INSUNITS_TO_UNIT
+    if insunits in INSUNITS_TO_UNIT:
+        scene.drawing_unit = INSUNITS_TO_UNIT[insunits]
+
+    # scene_coord = dxf_coord × (dxf_mm / drawing_mm) × GRID_UNIT
+    dxf_mm     = _INSUNITS_TO_MM.get(insunits, scene.drawing_unit.mm_per_unit)
+    drawing_mm = scene.drawing_unit.mm_per_unit
+    unit_scale = dxf_mm * GRID_UNIT / drawing_mm
+
     msp = doc.modelspace()
     count = 0
 
     for dxf_ent in msp:
-        layer_name = dxf_ent.dxf.layer if dxf_ent.dxf.hasattr("layer") else "0"
-        layer = layer_manager.get(layer_name) or layer_manager.current
-        ent = _import_entity(dxf_ent, layer)
-        if ent is not None:
-            scene.add_entity(ent)
-            count += 1
+        try:
+            layer_name = dxf_ent.dxf.layer if dxf_ent.dxf.hasattr("layer") else "0"
+            layer = layer_manager.get(layer_name) or layer_manager.current
+            ent = _import_entity(dxf_ent, layer, unit_scale)
+            if ent is not None:
+                scene.add_entity(ent)
+                count += 1
+        except Exception:
+            pass  # skip unsupported/malformed entities without aborting
 
     return count
 

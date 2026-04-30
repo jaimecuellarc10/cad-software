@@ -197,7 +197,11 @@ def _deserialize(data: dict, layer: Layer):
 
 def save_file(scene, path: str) -> None:
     entities_data = [d for e in scene.all_entities() if (d := _serialize(e)) is not None]
-    doc = {"version": FILE_VERSION, "entities": entities_data}
+    doc = {
+        "version": FILE_VERSION,
+        "drawing_unit": scene.drawing_unit.name,
+        "entities": entities_data,
+    }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(doc, f, indent=2)
 
@@ -207,6 +211,13 @@ def load_file(scene, layer_manager, path: str) -> None:
         doc = json.load(f)
 
     scene.clear_all()
+
+    from .constants import DrawingUnit
+    unit_name = doc.get("drawing_unit", "MM")
+    try:
+        scene.drawing_unit = DrawingUnit[unit_name]
+    except KeyError:
+        scene.drawing_unit = DrawingUnit.MM
 
     for data in doc.get("entities", []):
         layer_name = data.get("layer", "0")

@@ -253,9 +253,10 @@ class CADView(QGraphicsView):
         pt = self._snap_result.point
         ux = pt.x() / GRID_UNIT
         uy = -pt.y() / GRID_UNIT   # flip Y for display
+        unit_label = self.cad_scene.drawing_unit.label
         mode_str = (f"   [{self._snap_result.mode.name}]"
                     if self._snap_result.mode != SnapMode.GRID else "")
-        self.status_bar.showMessage(f"X: {ux:.3f}   Y: {uy:.3f}{mode_str}")
+        self.status_bar.showMessage(f"X: {ux:.3f}   Y: {uy:.3f}  {unit_label}{mode_str}")
 
         if self.current_tool:
             self.current_tool.on_move(self._snap_result.point, raw, event)
@@ -282,33 +283,15 @@ class CADView(QGraphicsView):
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
         current = self.transform().m11()
         new_scale = current * factor
-        if new_scale < 0.01 or new_scale > 500:
+        if new_scale < 0.0001 or new_scale > 500:
             return
         self.scale(factor, factor)
 
     def zoom_extents(self, margin_factor: float = 1.15):
-        entities = self.cad_scene.all_entities()
-        if not entities:
-            return
-        from .entities import LineEntity, PolylineEntity, CircleEntity, ArcEntity
-        import math
-        xs, ys = [], []
-        for e in entities:
-            if isinstance(e, LineEntity):
-                xs += [e.p1.x(), e.p2.x()]; ys += [e.p1.y(), e.p2.y()]
-            elif isinstance(e, PolylineEntity):
-                for v in e.vertices():
-                    xs.append(v.x()); ys.append(v.y())
-            elif isinstance(e, CircleEntity):
-                xs += [e.center.x()-e.radius, e.center.x()+e.radius]
-                ys += [e.center.y()-e.radius, e.center.y()+e.radius]
-            elif isinstance(e, ArcEntity):
-                xs += [e.center.x()-e.radius, e.center.x()+e.radius]
-                ys += [e.center.y()-e.radius, e.center.y()+e.radius]
-        if not xs:
+        if not self.cad_scene.all_entities():
             return
         from PySide6.QtCore import QRectF
-        rect = QRectF(min(xs), min(ys), max(xs)-min(xs), max(ys)-min(ys))
+        rect = self.cad_scene.itemsBoundingRect()
         if rect.width() < 1 and rect.height() < 1:
             rect = QRectF(rect.center().x()-50, rect.center().y()-50, 100, 100)
         rect = rect.adjusted(-rect.width()*(margin_factor-1)/2,

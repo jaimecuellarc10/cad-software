@@ -2,7 +2,7 @@ import os
 
 from PySide6.QtWidgets import (
     QMainWindow, QToolBar, QStatusBar, QLabel, QWidget, QVBoxLayout,
-    QFileDialog, QMessageBox, QDockWidget,
+    QFileDialog, QMessageBox, QDockWidget, QComboBox,
 )
 from PySide6.QtGui import QAction, QKeySequence, QFont
 from PySide6.QtCore import Qt
@@ -104,6 +104,7 @@ COMMANDS: dict[str, str] = {
     "EX": "extend", "EXT": "extend", "EXTEND": "extend",
     # Zoom extents
     "ZE": "zoom_extents", "EXTENTS": "zoom_extents", "ZOOM": "zoom_extents",
+    "UNITS": "units",
 }
 
 # Tool options (sub-commands while a tool is active)
@@ -163,6 +164,14 @@ class MainWindow(QMainWindow):
         coord_label.setFont(QFont("Courier New", 10))
         coord_label.setMinimumWidth(260)
         self.status.addPermanentWidget(coord_label)
+
+        from cad.constants import DrawingUnit
+        self._unit_combo = QComboBox()
+        for u in DrawingUnit:
+            self._unit_combo.addItem(u.label, userData=u)
+        self._unit_combo.setCurrentText(DrawingUnit.MM.label)
+        self._unit_combo.currentIndexChanged.connect(self._on_unit_changed)
+        self.status.addPermanentWidget(self._unit_combo)
 
         # ── View ──────────────────────────────────────────────────────────────
         self.view = CADView(
@@ -436,6 +445,10 @@ class MainWindow(QMainWindow):
     def _is_dirty(self) -> bool:
         return self.undo_stack._idx != self._save_idx
 
+    def _on_unit_changed(self):
+        u = self._unit_combo.currentData()
+        self.scene.drawing_unit = u
+
     def _confirm_save_if_needed(self) -> bool:
         """Returns True if caller may proceed, False if user cancelled."""
         if not self._is_dirty() and not self.scene.all_entities():
@@ -484,6 +497,7 @@ class MainWindow(QMainWindow):
         try:
             from cad.file_io import load_file
             load_file(self.scene, self.layer_manager, path)
+            self._unit_combo.setCurrentText(self.scene.drawing_unit.label)
             self.undo_stack._stack.clear()
             self.undo_stack._idx = -1
             self._current_file = path
@@ -550,6 +564,7 @@ class MainWindow(QMainWindow):
         try:
             from cad.export import import_dxf
             count = import_dxf(self.scene, self.layer_manager, path)
+            self._unit_combo.setCurrentText(self.scene.drawing_unit.label)
             self.view.zoom_extents()
             self.status.showMessage(f"Imported {count} entities from {path}", 5000)
         except Exception as exc:
@@ -621,6 +636,10 @@ class MainWindow(QMainWindow):
         if tool_name:
             if tool_name == "zoom_extents":
                 self.view.zoom_extents()
+            elif tool_name == "units":
+                # Cycle to next unit in the combo box
+                idx = (self._unit_combo.currentIndex() + 1) % self._unit_combo.count()
+                self._unit_combo.setCurrentIndex(idx)
             else:
                 self._activate_tool(tool_name)
             self._cmd_bar.add_history(f"  {cmd}")
