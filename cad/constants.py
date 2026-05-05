@@ -22,9 +22,13 @@ INSUNITS_TO_UNIT: dict[int, "DrawingUnit"] = {u.insunits: u for u in DrawingUnit
 
 
 class SnapMode(Enum):
-    NONE         = auto()
-    GRID         = auto()
-    ENDPOINT     = auto()
-    MIDPOINT     = auto()
-    CENTER       = auto()
-    INTERSECTION = auto()
+    NONE          = auto()
+    GRID          = auto()
+    ENDPOINT      = auto()
+    MIDPOINT      = auto()
+    CENTER        = auto()
+    INTERSECTION  = auto()
+    NEAREST       = auto()
+    PERPENDICULAR = auto()
+    TANGENT       = auto()
+    PARALLEL      = auto()

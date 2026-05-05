@@ -139,6 +139,8 @@ class MirrorTool(BaseTool):
             self._p1 = QPointF(snapped)
             self._cursor = QPointF(snapped)
             self._state = STATE_P2
+            if self.view:
+                self.view.snap_manager.ortho_base = self._p1
         elif self._state == STATE_P2:
             pt = self._cursor if self._angle_locked and self._cursor is not None else snapped
             self._p2 = QPointF(pt)
@@ -206,6 +208,7 @@ class MirrorTool(BaseTool):
         self._cur_vp = None
         self._dragging = False
         if self.view:
+            self.view.snap_manager.ortho_base = None
             self.view.viewport().update()
 
     # ── Overlay ───────────────────────────────────────────────────────────────
@@ -318,6 +321,7 @@ class MirrorTool(BaseTool):
         self._angle_locked = False
         self._locked_angle = 0.0
         if self.view:
+            self.view.snap_manager.ortho_base = None
             self.view.viewport().update()
 
 

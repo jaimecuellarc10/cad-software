@@ -57,6 +57,8 @@ class PropertiesPanel(QWidget):
         self._panel.propertyChanged.connect(self._apply_property)
         layout.addWidget(self._panel)
 
+        self._on_selection_show = None   # set by window to reveal the dock on selection
+
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._poll)
         self._timer.start(120)
@@ -72,6 +74,8 @@ class PropertiesPanel(QWidget):
         self._selected = selected
         objects = [e.to_props_dict() for e in selected]
         self._panel.set_selection(objects)
+        if selected and self._on_selection_show:
+            self._on_selection_show()
         # Install tab filter on newly created editor widgets
         for w in self._panel.findChildren(QWidget):
             w.setFocusPolicy(Qt.FocusPolicy.ClickFocus)

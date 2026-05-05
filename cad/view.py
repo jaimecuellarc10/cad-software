@@ -52,6 +52,11 @@ class CADView(QGraphicsView):
         # Start slightly zoomed so grid lines are visible
         self.scale(1.5, 1.5)
 
+    def focusNextPrevChild(self, _next: bool) -> bool:
+        # Prevent Qt from using Tab to move focus out of the canvas.
+        # Tab must reach keyPressEvent so tools can use it (e.g. angle lock).
+        return False
+
     # ── Tool management ───────────────────────────────────────────────────────
 
     def set_tool(self, tool: BaseTool):
@@ -71,6 +76,9 @@ class CADView(QGraphicsView):
 
     def drawBackground(self, painter: QPainter, rect: QRectF):
         super().drawBackground(painter, rect)
+
+        if not self.snap_manager.grid_visible:
+            return
 
         zoom = self.transform().m11()
 
@@ -151,9 +159,31 @@ class CADView(QGraphicsView):
         elif snap.mode == SnapMode.CENTER:
             painter.drawEllipse(vp.x() - h, vp.y() - h, s, s)
         elif snap.mode == SnapMode.INTERSECTION:
-            # X shape
             painter.drawLine(vp.x() - h, vp.y() - h, vp.x() + h, vp.y() + h)
             painter.drawLine(vp.x() + h, vp.y() - h, vp.x() - h, vp.y() + h)
+        elif snap.mode == SnapMode.NEAREST:
+            # Diamond
+            pts = QPolygon([
+                QPoint(vp.x(),     vp.y() - h),
+                QPoint(vp.x() + h, vp.y()),
+                QPoint(vp.x(),     vp.y() + h),
+                QPoint(vp.x() - h, vp.y()),
+            ])
+            painter.drawPolygon(pts)
+        elif snap.mode == SnapMode.PERPENDICULAR:
+            # Right-angle marker (L-shape at the foot)
+            painter.drawLine(vp.x(), vp.y() - h, vp.x(), vp.y() + h)
+            painter.drawLine(vp.x(), vp.y(),      vp.x() + h, vp.y())
+            painter.drawRect(vp.x(), vp.y() - h // 2, h // 2, h // 2)
+        elif snap.mode == SnapMode.TANGENT:
+            # Circle with a tangent line
+            r2 = h // 2
+            painter.drawEllipse(vp.x() - r2, vp.y() - r2, r2 * 2, r2 * 2)
+            painter.drawLine(vp.x() - h, vp.y() + h, vp.x() + h, vp.y() + h)
+        elif snap.mode == SnapMode.PARALLEL:
+            # Two short parallel lines
+            painter.drawLine(vp.x() - h, vp.y() - 2, vp.x() + h, vp.y() - 2)
+            painter.drawLine(vp.x() - h, vp.y() + 3, vp.x() + h, vp.y() + 3)
 
     def _draw_hover_feedback(self, painter: QPainter):
         if self._hovered_entity is None:
@@ -193,6 +223,11 @@ class CADView(QGraphicsView):
         if event.button() == Qt.MouseButton.MiddleButton:
             self._pan_origin = event.position().toPoint()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
+
+        if event.button() == Qt.MouseButton.RightButton:
+            # Right-click is handled by contextMenuEvent; don't forward to tools.
+            super().mousePressEvent(event)
             return
 
         if self.current_tool:
@@ -256,7 +291,7 @@ class CADView(QGraphicsView):
         unit_label = self.cad_scene.drawing_unit.label
         mode_str = (f"   [{self._snap_result.mode.name}]"
                     if self._snap_result.mode != SnapMode.GRID else "")
-        self.status_bar.showMessage(f"X: {ux:.3f}   Y: {uy:.3f}  {unit_label}{mode_str}")
+        self.status_bar.update_coords(ux, uy, unit_label, mode_str)
 
         if self.current_tool:
             self.current_tool.on_move(self._snap_result.point, raw, event)
@@ -356,16 +391,27 @@ class CADView(QGraphicsView):
         elif key == Qt.Key.Key_Delete:
             self._delete_selected()
 
-        elif key == Qt.Key.Key_F9:
-            self.snap_manager.grid_snap_enabled = not self.snap_manager.grid_snap_enabled
-            state = "ON" if self.snap_manager.grid_snap_enabled else "OFF"
-            self.status_bar.showMessage(f"Grid snap {state}", 2000)
+        elif key == Qt.Key.Key_F7:
+            self.snap_manager.grid_visible = not self.snap_manager.grid_visible
+            state = "ON" if self.snap_manager.grid_visible else "OFF"
+            self.status_bar.showMessage(f"Grid {state}", 2000)
+            self.viewport().update()
 
         elif key == Qt.Key.Key_F8:
             self.snap_manager.ortho_enabled = not self.snap_manager.ortho_enabled
             state = "ON" if self.snap_manager.ortho_enabled else "OFF"
             self.status_bar.showMessage(f"Ortho {state}", 2000)
             self.viewport().update()
+
+        elif key == Qt.Key.Key_F9:
+            self.snap_manager.grid_snap_enabled = not self.snap_manager.grid_snap_enabled
+            state = "ON" if self.snap_manager.grid_snap_enabled else "OFF"
+            self.status_bar.showMessage(f"Snap {state}", 2000)
+
+        elif key == Qt.Key.Key_F3:
+            self.snap_manager.osnap_enabled = not self.snap_manager.osnap_enabled
+            state = "ON" if self.snap_manager.osnap_enabled else "OFF"
+            self.status_bar.showMessage(f"Object Snap {state}", 2000)
 
         elif event.matches(QKeySequence.StandardKey.Undo):
             self.undo_stack.undo()
@@ -427,6 +473,75 @@ class CADView(QGraphicsView):
                 self.set_tool(self._select_tool)
                 self._notify_tool_change("select")
 
+    def contextMenuEvent(self, event):
+        from PySide6.QtWidgets import QMenu
+        from icons import Icons
+
+        tool = self.current_tool
+
+        # Mid-operation right-click: confirm the tool (like pressing Enter).
+        if tool and tool is not self._select_tool and not getattr(tool, "is_idle", True):
+            was_idle    = False
+            undo_before = self.undo_stack._idx
+            tool.finish()
+            self._update_prompt()
+            self._auto_exit(was_idle, undo_before)
+            return
+
+        selected = self.cad_scene.selected_entities()
+        menu = QMenu(self)
+
+        if selected:
+            pa = menu.addAction(Icons.get("layer"), "Properties")
+            pa.triggered.connect(
+                lambda: self._show_properties_fn and self._show_properties_fn()
+            )
+            menu.addSeparator()
+
+            for lbl, tname, icon in [
+                ("Move",   "move",   "move"),
+                ("Copy",   "copy",   "copy"),
+                ("Rotate", "rotate", "rotate"),
+                ("Mirror", "mirror", "mirror"),
+                ("Scale",  "scale",  "scale"),
+            ]:
+                a = menu.addAction(Icons.get(icon), lbl)
+                a.triggered.connect(
+                    lambda _=False, n=tname:
+                        self._activate_tool_fn and self._activate_tool_fn(n)
+                )
+
+            menu.addSeparator()
+            da = menu.addAction(Icons.get("erase"), "Delete")
+            da.triggered.connect(self._delete_selected)
+
+            menu.addSeparator()
+            ca = menu.addAction(Icons.get("copy"), "Copy to Clipboard")
+            ca.triggered.connect(self._copy_to_clipboard)
+
+            menu.addSeparator()
+            dsa = menu.addAction("Deselect All")
+            dsa.triggered.connect(self.cad_scene.clear_selection)
+        else:
+            sa = menu.addAction("Select All")
+            sa.setEnabled(bool(self.cad_scene.all_entities()))
+            sa.triggered.connect(self._select_all)
+
+            ze = menu.addAction(Icons.get("zoom-extents"), "Zoom Extents")
+            ze.triggered.connect(self.zoom_extents)
+
+            menu.addSeparator()
+            ppa = menu.addAction(Icons.get("copy"), "Paste")
+            ppa.setEnabled(bool(self._clipboard))
+            ppa.triggered.connect(self._paste_from_clipboard)
+
+        menu.exec(event.globalPos())
+
+    def _select_all(self):
+        for e in self.cad_scene.all_entities():
+            e.selected = True
+        self.viewport().update()
+
     def _delete_selected(self):
         selected = self.cad_scene.selected_entities()
         if selected:
@@ -470,6 +585,8 @@ class CADView(QGraphicsView):
             # Always-idle tool (e.g. hatch, point) just placed an entity
             self._on_tool_done()
 
-    _on_tool_change  = None   # called when view changes tool internally
-    _on_space_recall = None   # called when Space is pressed in select mode
-    _on_tool_done    = None   # called when a drawing tool transitions to idle
+    _on_tool_change       = None   # called when view changes tool internally
+    _on_space_recall      = None   # called when Space is pressed in select mode
+    _on_tool_done         = None   # called when a drawing tool transitions to idle
+    _show_properties_fn   = None   # called to reveal the properties dock
+    _activate_tool_fn     = None   # called with a tool name string

@@ -158,6 +158,8 @@ class MoveTool(BaseTool):
             self._base = QPointF(snapped)
             self._cursor = QPointF(snapped)
             self._state = STATE_DEST
+            if self.view:
+                self.view.snap_manager.ortho_base = self._base
         elif self._state == STATE_DEST:
             dest = self._cursor if self._angle_locked and self._cursor is not None else snapped
             self._commit(dest)
@@ -215,6 +217,7 @@ class MoveTool(BaseTool):
         self._cur_vp = None
         self._dragging = False
         if self.view:
+            self.view.snap_manager.ortho_base = None
             self.view.viewport().update()
 
     # ── Overlay ───────────────────────────────────────────────────────────────
@@ -310,6 +313,7 @@ class MoveTool(BaseTool):
         self._angle_locked = False
         self._locked_angle = 0.0
         if self.view:
+            self.view.snap_manager.ortho_base = None
             self.view.viewport().update()
 
 

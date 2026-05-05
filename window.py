@@ -1,10 +1,10 @@
 import os
 
 from PySide6.QtWidgets import (
-    QMainWindow, QToolBar, QStatusBar, QLabel, QWidget, QVBoxLayout,
-    QFileDialog, QMessageBox, QDockWidget, QComboBox,
+    QMainWindow, QToolBar, QLabel, QWidget, QVBoxLayout,
+    QHBoxLayout, QToolButton, QFileDialog, QMessageBox, QDockWidget, QComboBox,
 )
-from PySide6.QtGui import QAction, QKeySequence, QFont
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtCore import Qt
 
 from cad.export import export_dxf, export_pdf, HAS_EZDXF
@@ -156,22 +156,12 @@ class MainWindow(QMainWindow):
         self.snap_manager  = SnapManager()
         self.scene         = CADScene()
 
-        # ── Status bar ────────────────────────────────────────────────────────
-        self.status = QStatusBar()
-        self.setStatusBar(self.status)
-
-        coord_label = QLabel("X: 0.000   Y: 0.000")
-        coord_label.setFont(QFont("Courier New", 10))
-        coord_label.setMinimumWidth(260)
-        self.status.addPermanentWidget(coord_label)
-
-        from cad.constants import DrawingUnit
-        self._unit_combo = QComboBox()
-        for u in DrawingUnit:
-            self._unit_combo.addItem(u.label, userData=u)
-        self._unit_combo.setCurrentText(DrawingUnit.MM.label)
+        # ── Status bar (custom widget — replaces QStatusBar) ──────────────────
+        from widgets.statusbar import CADStatusBar
+        self.status = CADStatusBar(self.snap_manager)
+        self.statusBar().hide()                       # hide Qt's built-in bar
+        self._unit_combo = self.status.unit_combo
         self._unit_combo.currentIndexChanged.connect(self._on_unit_changed)
-        self.status.addPermanentWidget(self._unit_combo)
 
         # ── View ──────────────────────────────────────────────────────────────
         self.view = CADView(
@@ -186,14 +176,18 @@ class MainWindow(QMainWindow):
         self._cmd_bar._view_ref = self.view
         self.view._command_bar  = self._cmd_bar
 
-        # ── Central widget: view + command bar stacked ─────────────────────
+        # ── Central widget: ribbon + view + command bar + status bar ──────────
         central = QWidget()
         vlay    = QVBoxLayout(central)
         vlay.setContentsMargins(0, 0, 0, 0)
         vlay.setSpacing(0)
         vlay.addWidget(self.view)
         vlay.addWidget(self._cmd_bar)
+        vlay.addWidget(self.status)
         self.setCentralWidget(central)
+        self._central_vlay = vlay   # ribbon is inserted at index 0 later
+
+        self.status._view_ref = self.view   # for grid-visibility repaints
 
         # ── Tools ─────────────────────────────────────────────────────────────
         self._select_tool    = SelectTool()
@@ -233,17 +227,18 @@ class MainWindow(QMainWindow):
         self._current_file:   str | None = None
         self._save_idx:       int        = -1   # undo._idx at last save
 
-        self.view._select_tool     = self._select_tool
-        self.view._text_tool       = self._text_tool
-        self.view._on_tool_change  = self._sync_tool_buttons
-        self.view._on_space_recall = self._recall_last_tool
-        self.view._on_tool_done    = lambda: self._activate_tool("select")
+        self.view._select_tool       = self._select_tool
+        self.view._text_tool         = self._text_tool
+        self.view._on_tool_change    = self._sync_tool_buttons
+        self.view._on_space_recall   = self._recall_last_tool
+        self.view._on_tool_done      = lambda: self._activate_tool("select")
+        self.view._activate_tool_fn  = self._activate_tool
 
         # ── UI ────────────────────────────────────────────────────────────────
         self._build_draw_toolbar()
-        self._build_snap_bar()
         self._build_properties_dock()
         self._build_menu()
+        self._build_ribbon()
 
         self._activate_tool("select")
 
@@ -253,6 +248,7 @@ class MainWindow(QMainWindow):
         tb = QToolBar("Draw")
         tb.setMovable(False)
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, tb)
+        self._draw_toolbar = tb
 
         self._tool_actions: dict[str, QAction] = {}
 
@@ -319,48 +315,6 @@ class MainWindow(QMainWindow):
         add("extend",    "Extend",
             "Extend  [EX]\nClick near the end of a line to extend it to another entity")
 
-    # ── Snap toggle bar (bottom) ──────────────────────────────────────────────
-
-    def _build_snap_bar(self):
-        sb = QToolBar("Object Snap")
-        sb.setMovable(False)
-        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, sb)
-
-        lbl = QLabel("  OSNAP: ")
-        lbl.setFont(QFont("Courier New", 9))
-        sb.addWidget(lbl)
-
-        grid = QAction("Grid", self)
-        grid.setCheckable(True)
-        grid.setChecked(self.snap_manager.grid_snap_enabled)
-        grid.setToolTip("GRID snap  [F9]")
-        grid.toggled.connect(self._toggle_grid_snap)
-        sb.addAction(grid)
-
-        ortho = QAction("Ortho", self)
-        ortho.setCheckable(True)
-        ortho.setChecked(self.snap_manager.ortho_enabled)
-        ortho.setToolTip("ORTHO  [F8]")
-        ortho.toggled.connect(self._toggle_ortho)
-        sb.addAction(ortho)
-
-        snap_defs = [
-            (SnapMode.ENDPOINT,     "Endpoint",     "ENDpoint  —  yellow square"),
-            (SnapMode.MIDPOINT,     "Midpoint",     "MIDpoint  —  yellow triangle"),
-            (SnapMode.CENTER,       "Center",       "CENTER  —  yellow circle"),
-            (SnapMode.INTERSECTION, "Intersection", "INTersection  —  yellow X"),
-        ]
-
-        self._snap_actions: dict[SnapMode, QAction] = {}
-        for mode, label, tip in snap_defs:
-            a = QAction(label, self)
-            a.setCheckable(True)
-            a.setChecked(mode in self.snap_manager.active_modes)
-            a.setToolTip(tip)
-            a.toggled.connect(lambda checked, m=mode: self._toggle_snap(m, checked))
-            sb.addAction(a)
-            self._snap_actions[mode] = a
-
     # ── Menu ──────────────────────────────────────────────────────────────────
 
     def _build_menu(self):
@@ -421,6 +375,11 @@ class MainWindow(QMainWindow):
 
         # ── View ──────────────────────────────────────────────────────────────
         view_menu = mb.addMenu("View")
+
+        tb_action = self._draw_toolbar.toggleViewAction()
+        tb_action.setText("Draw Toolbar")
+        view_menu.addAction(tb_action)
+
         props_action = self._props_dock.toggleViewAction()
         props_action.setText("Properties Panel")
         props_action.setShortcut("Ctrl+Shift+I")
@@ -429,6 +388,8 @@ class MainWindow(QMainWindow):
     # ── Properties dock ───────────────────────────────────────────────────────
 
     def _build_properties_dock(self):
+        from theme import Colors
+
         self._props_panel = PropertiesPanel(self.scene, self.view)
         self._props_dock = QDockWidget("Properties", self)
         self._props_dock.setWidget(self._props_panel)
@@ -439,6 +400,48 @@ class MainWindow(QMainWindow):
             QDockWidget.DockWidgetFeature.DockWidgetFloatable |
             QDockWidget.DockWidgetFeature.DockWidgetClosable)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._props_dock)
+
+        # ── Custom title bar with explicit × button ───────────────────────────
+        title_bar = QWidget()
+        title_bar.setStyleSheet(f"background: {Colors.BG_HEADER};")
+        tbl = QHBoxLayout(title_bar)
+        tbl.setContentsMargins(8, 3, 4, 3)
+        tbl.setSpacing(4)
+
+        lbl = QLabel("Properties")
+        lbl.setStyleSheet(
+            f"color: {Colors.TEXT}; font-size: 9pt; background: transparent;"
+        )
+        tbl.addWidget(lbl)
+        tbl.addStretch()
+
+        close_btn = QToolButton()
+        close_btn.setText("×")
+        close_btn.setFixedSize(18, 18)
+        close_btn.setStyleSheet(f"""
+            QToolButton {{
+                background: transparent;
+                border: none;
+                color: {Colors.TEXT_DIM};
+                font-size: 13pt;
+                padding: 0;
+            }}
+            QToolButton:hover {{
+                background: {Colors.ERROR};
+                color: {Colors.TEXT};
+                border-radius: 2px;
+            }}
+        """)
+        close_btn.clicked.connect(self._props_dock.close)
+        tbl.addWidget(close_btn)
+
+        self._props_dock.setTitleBarWidget(title_bar)
+
+        # ── Callbacks ─────────────────────────────────────────────────────────
+        # Auto-show dock when the user selects an entity.
+        self._props_panel._on_selection_show = lambda: self._props_dock.show()
+        # Right-click "Properties" shows the dock.
+        self.view._show_properties_fn = lambda: self._props_dock.show()
 
     # ── File operations ───────────────────────────────────────────────────────
 
@@ -694,10 +697,204 @@ class MainWindow(QMainWindow):
             self._last_draw_tool = name
         self._sync_tool_buttons(name)
         self.view.set_tool(tool)
+        self.view.setFocus()
+
+    # ── Ribbon ───────────────────────────────────────────────────────────────
+
+    def _build_ribbon(self):
+        from widgets.ribbon import RibbonWidget
+        from icons import Icons
+
+        self._ribbon = RibbonWidget()
+        self._ribbon_tool_btns: dict[str, list] = {}
+        self._central_vlay.insertWidget(0, self._ribbon)
+
+        # Helper: create a checkable tool button and track it for sync.
+        def _tool(panel, large, icon_name, label, tool_name, tip="", col=None):
+            icon = Icons.get(icon_name)
+            cb   = lambda _=False, n=tool_name: self._activate_tool(n)
+            if large:
+                btn = panel.add_large(icon, label, cb, tip, checkable=True)
+            else:
+                btn = panel.add_small(icon, label, cb, tip, checkable=True, column=col)
+            self._ribbon_tool_btns.setdefault(tool_name, []).append(btn)
+            return btn
+
+        # ── Home ─────────────────────────────────────────────────────────────
+        home = self._ribbon.add_tab_row("Home")
+
+        # File panel
+        fp = self._ribbon.insert_panel(home, "File")
+        fp.add_large(Icons.get("new"),  "New",  self._new_file,  "New  [Ctrl+N]")
+        fp.add_large(Icons.get("open"), "Open", self._open_file, "Open  [Ctrl+O]")
+        fp.add_large(Icons.get("save"), "Save", self._save_file, "Save  [Ctrl+S]")
+        _uc = fp.add_small_column()
+        fp.add_small(Icons.get("undo"), "Undo", self.undo_stack.undo, "Undo  [Ctrl+Z]", column=_uc)
+        fp.add_small(Icons.get("redo"), "Redo", self.undo_stack.redo, "Redo  [Ctrl+Y]", column=_uc)
+
+        # Draw panel
+        dp = self._ribbon.insert_panel(home, "Draw")
+        _tool(dp, True,  "line",      "Line",      "line",      "Line  [L]")
+        _tool(dp, True,  "polyline",  "Polyline",  "polyline",  "Polyline  [PL]")
+        _tool(dp, True,  "circle",    "Circle",    "circle",    "Circle  [C]")
+        _tool(dp, True,  "arc",       "Arc",       "arc",       "Arc  [A]")
+        _tool(dp, True,  "rectangle", "Rectangle", "rectangle", "Rectangle  [REC]")
+        dp.add_separator()
+        _c1 = dp.add_small_column()
+        _tool(dp, False, "ellipse",  "Ellipse",  "ellipse",  "Ellipse  [EL]",  col=_c1)
+        _tool(dp, False, "polygon",  "Polygon",  "polygon",  "Polygon  [POL]", col=_c1)
+        _c2 = dp.add_small_column()
+        _tool(dp, False, "text",    "Text",    "text",    "Text  [T]",       col=_c2)
+        _tool(dp, False, "spline",  "Spline",  "spline",  "Spline  [SPL]",   col=_c2)
+        _c3 = dp.add_small_column()
+        _tool(dp, False, "hatch",   "Hatch",   "hatch",   "Hatch  [H]",      col=_c3)
+        _tool(dp, False, "xline",   "XLine",   "xline",   "XLine  [XLINE]",  col=_c3)
+        _tool(dp, False, "point",   "Point",   "point",   "Point  [PO]",     col=_c3)
+
+        # Modify panel
+        mp = self._ribbon.insert_panel(home, "Modify")
+        _tool(mp, True,  "move",    "Move",    "move",    "Move  [M]")
+        _tool(mp, True,  "copy",    "Copy",    "copy",    "Copy  [CO]")
+        _tool(mp, True,  "rotate",  "Rotate",  "rotate",  "Rotate  [RO]")
+        _tool(mp, True,  "mirror",  "Mirror",  "mirror",  "Mirror  [MI]")
+        mp.add_separator()
+        _m1 = mp.add_small_column()
+        _tool(mp, False, "scale",   "Scale",   "scale",   "Scale  [SC]",    col=_m1)
+        _tool(mp, False, "offset",  "Offset",  "offset",  "Offset  [O]",    col=_m1)
+        _m2 = mp.add_small_column()
+        _tool(mp, False, "trim",    "Trim",    "trim",    "Trim  [TR]",     col=_m2)
+        _tool(mp, False, "extend",  "Extend",  "extend",  "Extend  [EX]",   col=_m2)
+        _m3 = mp.add_small_column()
+        _tool(mp, False, "fillet",  "Fillet",  "fillet",  "Fillet  [F]",    col=_m3)
+        _tool(mp, False, "chamfer", "Chamfer", "chamfer", "Chamfer  [CHA]", col=_m3)
+        _m4 = mp.add_small_column()
+        _tool(mp, False, "break",   "Break",   "break",   "Break  [BR]",    col=_m4)
+        _tool(mp, False, "array",   "Array",   "array",   "Array  [AR]",    col=_m4)
+        _m5 = mp.add_small_column()
+        _tool(mp, False, "stretch", "Stretch", "stretch", "Stretch  [S]",   col=_m5)
+        _tool(mp, False, "explode", "Explode", "explode", "Explode  [X]",   col=_m5)
+        _tool(mp, False, "join",    "Join",    "join",    "Join  [J]",      col=_m5)
+        _m6 = mp.add_small_column()
+        _tool(mp, False, "lengthen","Lengthen","lengthen","Lengthen  [LEN]",col=_m6)
+        _tool(mp, False, "erase",   "Erase",   "erase",   "Erase  [E]",     col=_m6)
+
+        # Annotate panel (on Home for quick access)
+        ap = self._ribbon.insert_panel(home, "Annotate")
+        _tool(ap, True, "dimlinear",  "Linear",  "dimlinear",  "Linear Dim  [DIM]")
+        _tool(ap, True, "dimangular", "Angular", "dimangular", "Angular Dim  [DAN]")
+
+        # ── Insert ───────────────────────────────────────────────────────────
+        ins = self._ribbon.add_tab_row("Insert")
+
+        id_ = self._ribbon.insert_panel(ins, "Draw")
+        for icon_n, lbl, name, tip in [
+            ("line",     "Line",     "line",     "Line  [L]"),
+            ("polyline", "Polyline", "polyline", "Polyline  [PL]"),
+            ("circle",   "Circle",   "circle",   "Circle  [C]"),
+            ("arc",      "Arc",      "arc",      "Arc  [A]"),
+            ("rectangle","Rectangle","rectangle","Rectangle  [REC]"),
+            ("ellipse",  "Ellipse",  "ellipse",  "Ellipse  [EL]"),
+            ("spline",   "Spline",   "spline",   "Spline  [SPL]"),
+        ]:
+            _tool(id_, True, icon_n, lbl, name, tip)
+
+        # ── Annotate ─────────────────────────────────────────────────────────
+        ann = self._ribbon.add_tab_row("Annotate")
+
+        dimp = self._ribbon.insert_panel(ann, "Dimensions")
+        _tool(dimp, True, "dimlinear",  "Linear",  "dimlinear",  "Linear Dim  [DIM]")
+        _tool(dimp, True, "dimangular", "Angular", "dimangular", "Angular Dim  [DAN]")
+
+        txtp = self._ribbon.insert_panel(ann, "Text")
+        _tool(txtp, True, "text", "Text", "text", "Text  [T]")
+
+        mkp = self._ribbon.insert_panel(ann, "Markup")
+        _tool(mkp, True, "hatch",  "Hatch",  "hatch",  "Hatch  [H]")
+        _tool(mkp, True, "spline", "Spline", "spline", "Spline  [SPL]")
+
+        # ── View ─────────────────────────────────────────────────────────────
+        vw = self._ribbon.add_tab_row("View")
+
+        navp = self._ribbon.insert_panel(vw, "Navigate")
+        navp.add_large(
+            Icons.get("zoom-extents"), "Extents",
+            self.view.zoom_extents, "Zoom Extents  [ZE]",
+        )
+
+        disp = self._ribbon.insert_panel(vw, "Display")
+        _dc = disp.add_small_column()
+        grid_btn = disp.add_small(
+            Icons.get("grid"), "Grid Snap",
+            tooltip="Toggle grid snap  [F9]", checkable=True, column=_dc,
+        )
+        grid_btn.setChecked(self.snap_manager.grid_snap_enabled)
+        grid_btn.toggled.connect(self._toggle_grid_snap)
+
+        ortho_btn = disp.add_small(
+            Icons.get("ortho"), "Ortho",
+            tooltip="Toggle ortho  [F8]", checkable=True, column=_dc,
+        )
+        ortho_btn.setChecked(self.snap_manager.ortho_enabled)
+        ortho_btn.toggled.connect(self._toggle_ortho)
+
+        snapp = self._ribbon.insert_panel(vw, "Object Snap")
+        from cad.constants import SnapMode
+        _sc = snapp.add_small_column()
+        for mode, lbl, tip in [
+            (SnapMode.ENDPOINT,     "Endpoint",     "Snap endpoint"),
+            (SnapMode.MIDPOINT,     "Midpoint",     "Snap midpoint"),
+            (SnapMode.CENTER,       "Center",       "Snap center"),
+            (SnapMode.INTERSECTION, "Intersect",    "Snap intersection"),
+        ]:
+            sb = snapp.add_small(
+                Icons.get("snap"), lbl, tooltip=tip,
+                checkable=True, column=_sc,
+            )
+            sb.setChecked(mode in self.snap_manager.active_modes)
+            sb.toggled.connect(lambda on, m=mode: self._toggle_snap(m, on))
+
+        palp = self._ribbon.insert_panel(vw, "Palettes")
+        _pc = palp.add_small_column()
+        tb_btn = palp.add_small(
+            Icons.get("collapse"), "Draw Toolbar",
+            tooltip="Toggle draw toolbar  (View menu)", checkable=True, column=_pc,
+        )
+        tb_btn.setChecked(True)   # toolbar starts visible
+        tb_btn.toggled.connect(self._draw_toolbar.setVisible)
+        self._draw_toolbar.visibilityChanged.connect(tb_btn.setChecked)
+
+        palp.add_small(
+            Icons.get("layer"), "Properties",
+            self._props_dock.toggleViewAction().trigger,
+            "Properties panel  [Ctrl+Shift+I]", column=_pc,
+        )
+
+        # ── Output ───────────────────────────────────────────────────────────
+        out = self._ribbon.add_tab_row("Output")
+
+        expp = self._ribbon.insert_panel(out, "Export")
+        expp.add_large(
+            Icons.get("export-dxf"), "Export DXF",
+            self._export_dxf, "Export DXF  [Ctrl+Shift+D]",
+        )
+        expp.add_large(
+            Icons.get("export-pdf"), "Export PDF",
+            self._export_pdf, "Export PDF  [Ctrl+Shift+P]",
+        )
+        _ec = expp.add_small_column()
+        expp.add_small(
+            Icons.get("import-dxf"), "Import DXF",
+            self._import_dxf, "Import DXF", column=_ec,
+        )
 
     def _sync_tool_buttons(self, active_name: str):
         for name, action in self._tool_actions.items():
             action.setChecked(name == active_name)
+        if hasattr(self, "_ribbon_tool_btns"):
+            for name, btns in self._ribbon_tool_btns.items():
+                checked = name == active_name
+                for btn in btns:
+                    btn.setChecked(checked)
 
     def _recall_last_tool(self):
         if self._last_draw_tool:

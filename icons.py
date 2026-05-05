@@ -73,6 +73,27 @@ class IconProvider:
         "layer":        "mdi6.layers-outline",
         "linetype":     "mdi6.dots-horizontal",
 
+        # Annotation / dimension
+        "dimlinear":    "mdi6.ruler",
+        "dimangular":   "mdi6.angle-acute",
+
+        # Extra draw
+        "text":         "mdi6.format-text",
+        "spline":       "mdi6.vector-bezier",
+        "xline":        "mdi6.infinity",
+        "point":        "mdi6.circle-medium",
+
+        # Extra modify
+        "break":        "mdi6.link-variant-off",
+        "join":         "mdi6.link-variant",
+        "lengthen":     "mdi6.arrow-expand-all",
+        "erase":        "mdi6.eraser",
+
+        # File / import
+        "import-dxf":   "mdi6.file-import-outline",
+        "zoom-extents": "mdi6.fit-to-page-outline",
+        "dyninput":     "mdi6.keyboard-outline",
+
         # Status bar
         "grid":         "mdi6.grid",
         "snap":         "mdi6.magnet",

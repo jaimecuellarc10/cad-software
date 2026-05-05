@@ -262,6 +262,30 @@ def build_qss() -> str:
         color: {c.TEXT_DIM};
     }}
 
+    /* Status-bar snap toggle buttons */
+    QPushButton#StatusBtn {{
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 2px;
+        color: {c.TEXT_DIM};
+        font-size: 8pt;
+        padding: 1px 6px;
+        text-align: left;
+    }}
+    QPushButton#StatusBtn:hover {{
+        background: {c.BG_PANEL_ALT};
+        border-color: {c.BORDER_LIGHT};
+        color: {c.TEXT};
+    }}
+    QPushButton#StatusBtn:checked {{
+        background: {c.ACCENT_BG};
+        border-color: {c.ACCENT};
+        color: {c.TEXT};
+    }}
+    QPushButton#StatusBtn:disabled {{
+        color: {c.TEXT_DISABLED};
+    }}
+
     /* ============ Properties panel custom widgets ============ */
     /* Selection combo at top */
     QComboBox#SelectionCombo {{
