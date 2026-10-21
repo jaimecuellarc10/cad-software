@@ -219,9 +219,16 @@ def load_file(scene, layer_manager, path: str) -> None:
     except KeyError:
         scene.drawing_unit = DrawingUnit.MM
 
+    skipped = 0
     for data in doc.get("entities", []):
-        layer_name = data.get("layer", "0")
-        layer = layer_manager.get(layer_name) or layer_manager.current
-        e = _deserialize(data, layer)
-        if e is not None:
-            scene.add_entity(e)
+        try:
+            layer_name = data.get("layer", "0")
+            layer = layer_manager.get(layer_name) or layer_manager.current
+            e = _deserialize(data, layer)
+            if e is not None:
+                scene.add_entity(e)
+        except Exception:
+            skipped += 1
+    if skipped:
+        import warnings
+        warnings.warn(f"load_file: skipped {skipped} unreadable entities")
