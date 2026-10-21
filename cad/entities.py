@@ -942,7 +942,7 @@ class TextEntity(CADEntity):
         painter.translate(self._pos)
         painter.rotate(-self._angle_deg)
         painter.setFont(QFont(self._font_family, max(1, int(self._height * GRID_UNIT))))
-        painter.setPen(QPen(self._draw_color, 0))
+        painter.setPen(QPen(self.draw_color, 0))
         painter.drawText(0, 0, self._text)
         painter.restore()
         if self._selected:
