@@ -44,4 +44,12 @@ class CADScene(QGraphicsScene):
     def clear_all(self):
         for e in list(self._entities):
             self.removeItem(e)
+        # Drain Qt's pending render events before dropping Python refs.
+        # CPython frees objects immediately on refcount-0; if Qt still has a
+        # deferred paint queued for a removed item, it would call paint() on
+        # freed memory → SIGSEGV. processEvents() flushes that queue first.
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app:
+            app.processEvents()
         self._entities.clear()
